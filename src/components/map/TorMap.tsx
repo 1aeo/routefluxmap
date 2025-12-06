@@ -1,0 +1,693 @@
+/**
+ * TorMap - Main map visualization component
+ * Uses Deck.gl for relay markers + MapLibre GL for base map
+ */
+
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import DeckGL from '@deck.gl/react';
+import { ScatterplotLayer } from '@deck.gl/layers';
+import { Map } from 'react-map-gl/maplibre';
+import type { MapViewState, PickingInfo } from '@deck.gl/core';
+import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
+import { config } from '../../lib/config';
+import RelayPopup from '../ui/RelayPopup';
+import DateSliderChart from '../ui/DateSliderChart';
+import LayerControls from '../ui/LayerControls';
+import { createCountryLayer, CountryTooltip } from './CountryLayer';
+import { useParticleLayer } from './ParticleOverlay';
+import 'maplibre-gl/dist/maplibre-gl.css';
+
+
+interface TorMapProps {
+  dataUrl: string;
+}
+
+const INITIAL_VIEW_STATE: MapViewState = {
+  longitude: -40,
+  latitude: 30,
+  zoom: 3,
+  pitch: 0,
+  bearing: 0,
+};
+
+// Parse URL hash for date parameter
+function parseUrlHash(): { date?: string } {
+  if (typeof window === 'undefined') return {};
+  const hash = window.location.hash.slice(1);
+  const params: Record<string, string> = {};
+  
+  hash.split('&').forEach(part => {
+    const [key, value] = part.split('=');
+    if (key && value) params[key] = decodeURIComponent(value);
+  });
+  
+  return params;
+}
+
+export default function TorMap({ dataUrl }: TorMapProps) {
+  const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
+  const [relayData, setRelayData] = useState<RelayData | null>(null);
+  const [dateIndex, setDateIndex] = useState<DateIndex | null>(null);
+  const [currentDate, setCurrentDate] = useState<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<AggregatedNode | null>(null);
+  const [popupPosition, setPopupPosition] = useState<{ x: number; y: number } | null>(null);
+  const [hoverInfo, setHoverInfo] = useState<{ node: AggregatedNode; x: number; y: number } | null>(null);
+  
+  // Layer visibility state
+  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
+    relays: true,
+    countries: false,
+    labels: true,
+    particles: true, // Enable particles by default
+  });
+  
+  // Particle settings
+  const [particleCount, setParticleCount] = useState(50000); // Start with lower count for performance
+  const [lineDensityFactor, setLineDensityFactor] = useState(1.0);
+  const [lineOpacityFactor, setLineOpacityFactor] = useState(1.0);
+  const [lineSpeedFactor, setLineSpeedFactor] = useState(2.0); // 200% of original speed
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Clear hover/popup when relay layer is hidden
+  const handleLayerVisibilityChange = useCallback((newVisibility: LayerVisibility) => {
+    setLayerVisibility(newVisibility);
+    // Clear relay hover/popup if relays are hidden
+    if (!newVisibility.relays) {
+      setHoverInfo(null);
+      setSelectedNode(null);
+      setPopupPosition(null);
+    }
+    // Clear country hover if countries are hidden
+    if (!newVisibility.countries) {
+      setCountryHover(null);
+    }
+  }, []);
+  
+  // Country data state
+  const [countryData, setCountryData] = useState<CountryHistogram>({});
+  const [countryGeojson, setCountryGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [countryHover, setCountryHover] = useState<{ code: string; x: number; y: number } | null>(null);
+
+  // Fetch date index
+  useEffect(() => {
+    async function fetchIndex() {
+      try {
+        // Try local first, then remote
+        let response;
+        try {
+          response = await fetch('/data/index.json');
+          if (!response.ok) throw new Error('Local not found');
+        } catch {
+          response = await fetch(`${dataUrl}/index.json`);
+        }
+
+        if (!response.ok) throw new Error('Failed to load index');
+        
+        const index: DateIndex = await response.json();
+        setDateIndex(index);
+        
+        // Check URL hash for initial date
+        const urlParams = parseUrlHash();
+        if (urlParams.date && index.dates.includes(urlParams.date)) {
+          setCurrentDate(urlParams.date);
+        } else if (index.dates.length > 0) {
+          // Default to latest date
+          setCurrentDate(index.dates[index.dates.length - 1]);
+        }
+      } catch (err: any) {
+        setError(err.message);
+        setLoading(false);
+      }
+    }
+    
+    fetchIndex();
+  }, [dataUrl]);
+
+  // Listen for URL hash changes
+  useEffect(() => {
+    const handleHashChange = () => {
+      const params = parseUrlHash();
+      if (params.date && dateIndex?.dates.includes(params.date)) {
+        setCurrentDate(params.date);
+      }
+    };
+    
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [dateIndex]);
+
+  // Load country GeoJSON for choropleth
+  useEffect(() => {
+    async function loadCountryGeoJson() {
+      try {
+        // Try to load from local first, then fallback
+        let response;
+        try {
+          response = await fetch('/data/countries.geojson');
+          if (!response.ok) throw new Error('Local not found');
+        } catch {
+          // Use a simplified world geojson (we'll create this)
+          response = await fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson');
+        }
+        
+        if (response.ok) {
+          const geojson = await response.json();
+          setCountryGeojson(geojson);
+        }
+      } catch (err) {
+        console.warn('Could not load country GeoJSON:', err);
+      }
+    }
+    
+    loadCountryGeoJson();
+  }, []);
+
+  // Generate mock country data from relay data (until we have real client data)
+  useEffect(() => {
+    if (!relayData) return;
+    
+    // For now, generate mock data based on relay locations
+    // In production, this would come from Tor metrics API
+    const mockData: CountryHistogram = {};
+    
+    // This is placeholder - real implementation would fetch from metrics
+    // For now, just show that the layer works
+    relayData.nodes.forEach(node => {
+      // Estimate country from lat/lng (very rough approximation for demo)
+      // Real implementation would have country codes in the relay data
+      const lat = node.lat;
+      const lng = node.lng;
+      
+      // Very basic region detection for demo purposes
+      let cc = 'XX';
+      if (lat > 35 && lat < 70 && lng > -10 && lng < 40) cc = 'EU';
+      else if (lat > 25 && lat < 50 && lng > -130 && lng < -60) cc = 'US';
+      else if (lat > -35 && lat < 5 && lng > -80 && lng < -35) cc = 'BR';
+      else if (lat > 20 && lat < 55 && lng > 70 && lng < 150) cc = 'CN';
+      
+      mockData[cc] = (mockData[cc] || 0) + node.bandwidth;
+    });
+    
+    setCountryData(mockData);
+  }, [relayData]);
+
+  // Fetch relay data when date changes
+  useEffect(() => {
+    if (!currentDate) return;
+
+    async function fetchRelays() {
+      setLoading(true);
+      try {
+        // Try local first, then remote
+        let response;
+        try {
+          response = await fetch(`/data/relays-${currentDate}.json`);
+          if (!response.ok) throw new Error('Local not found');
+        } catch {
+          response = await fetch(`${dataUrl}/current/relays-${currentDate}.json`);
+        }
+
+        if (!response.ok) throw new Error('Failed to load relay data');
+        
+        const data: RelayData = await response.json();
+        setRelayData(data);
+        setError(null);
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+        setInitialLoading(false);
+      }
+    }
+
+    fetchRelays();
+  }, [currentDate, dataUrl]);
+
+  // Handle date change from slider
+  const handleDateChange = useCallback((date: string) => {
+    setCurrentDate(date);
+    // Close any open popups when date changes
+    setSelectedNode(null);
+    setPopupPosition(null);
+  }, []);
+
+  // Handle click on relay marker
+  const handleClick = useCallback((info: PickingInfo) => {
+    if (info.object) {
+      setSelectedNode(info.object as AggregatedNode);
+      setPopupPosition({ x: info.x, y: info.y });
+    } else {
+      setSelectedNode(null);
+      setPopupPosition(null);
+    }
+  }, []);
+
+  // Handle hover
+  const handleHover = useCallback((info: PickingInfo) => {
+    if (info.object) {
+      setHoverInfo({
+        node: info.object as AggregatedNode,
+        x: info.x,
+        y: info.y,
+      });
+    } else {
+      setHoverInfo(null);
+    }
+  }, []);
+
+  // Close popup
+  const handleClosePopup = useCallback(() => {
+    setSelectedNode(null);
+    setPopupPosition(null);
+  }, []);
+
+  // Handle country hover
+  const handleCountryHover = useCallback((code: string | null, x: number, y: number) => {
+    if (code) {
+      setCountryHover({ code, x, y });
+    } else {
+      setCountryHover(null);
+    }
+  }, []);
+
+  // Handle country click
+  const handleCountryClick = useCallback((code: string, name: string) => {
+    console.log(`Country clicked: ${name} (${code})`);
+    // TODO: Show country statistics popup
+  }, []);
+
+  // Particle layer - smaller dots with opacity
+  const particleLayers = useParticleLayer({
+    nodes: relayData?.nodes ?? [],
+    visible: layerVisibility.particles,
+    particleCount,
+    particleSize: 1, // Smaller particles
+    speedFactor: lineSpeedFactor,
+    offsetFactor: config.particleOffset.default,
+    hiddenServiceProbability: config.hiddenServiceProbability,
+    trafficType: 'all',
+    lineDensityFactor,
+    lineOpacityFactor,
+  });
+
+  // Create static layers (without particles to avoid re-render loops)
+  const baseLayers = useMemo(() => {
+    const result: any[] = [];
+    
+    // Country layer (rendered first, underneath relays)
+    const countryLayer = createCountryLayer({
+      countryData,
+      geojson: countryGeojson,
+      visible: layerVisibility.countries,
+      opacity: 0.5,
+      onHover: handleCountryHover,
+      onClick: handleCountryClick,
+    });
+    if (countryLayer) {
+      result.push(countryLayer);
+    }
+    
+    // Relay layer
+    if (relayData && layerVisibility.relays) {
+      // Find max relay count for scaling
+      const maxRelayCount = Math.max(...relayData.nodes.map(n => n.relays.length), 1);
+      
+      // Calculate zoom-based scaling factor - gentle scaling
+      const zoom = viewState.zoom;
+      // At zoom 3, scale = 1. At zoom 10, scale = ~4 (was ~10)
+      const zoomScale = Math.pow(1.2, zoom - 3);
+      
+      // Calculate min/max based on zoom - more granularity at higher zooms
+      // At zoom 1-2: min 2, max 15 (reduced max to avoid clutter)
+      const baseMinPixels = zoom < 4 ? 2 : zoom < 6 ? 3 : 4;
+      const baseMaxPixels = zoom < 3 ? 15 : zoom < 4 ? 20 : zoom < 6 ? 30 : 50;
+      
+      result.push(
+        new ScatterplotLayer({
+          id: 'relays',
+          data: relayData.nodes,
+          pickable: true,
+          opacity: 0.85,
+          stroked: true,
+          filled: true,
+          radiusScale: zoomScale,
+          radiusMinPixels: baseMinPixels,
+          radiusMaxPixels: baseMaxPixels,
+          lineWidthMinPixels: 1,
+          getPosition: (d: AggregatedNode) => [d.lng, d.lat],
+          getRadius: (d: AggregatedNode) => {
+            // Scale primarily by relay count (cluster density)
+            const minRadius = config.nodeRadius.min;
+            const maxRadius = config.nodeRadius.max;
+            
+            // Use log scale for relay count to handle large differences
+            // More aggressive scaling for clusters
+            const relayCount = d.relays.length;
+            const countNormalized = Math.log(1 + relayCount * 2) / Math.log(1 + maxRelayCount * 2);
+            
+            // Also factor in bandwidth (secondary)
+            const bwNormalized = d.bandwidth / (relayData.minMax.max || 1);
+            
+            // Combine: count (density) vs bandwidth
+            // At lower zooms, emphasize count more to show "major hubs"
+            const zoomFactor = Math.max(0, 1 - (zoom - 1) / 4); // 1.0 at zoom 1, 0.0 at zoom 5
+            const countWeight = 0.8 + zoomFactor * 0.15; // 0.95 at zoom 1, 0.8 at zoom 5
+            const bwWeight = 1 - countWeight;
+            
+            const combined = countNormalized * countWeight + Math.sqrt(bwNormalized) * bwWeight;
+            
+            // Apply non-linear scaling for better visual differentiation
+            // Exponent: higher = smaller dots for low values
+            // At zoom 1-2, we want high differentiation
+            const exponent = zoom < 3 ? 0.9 : 0.7;
+            const radius = minRadius + (maxRadius - minRadius) * Math.pow(combined, exponent);
+            
+            return radius;
+          },
+          getFillColor: (d: AggregatedNode) => {
+            // Color by relay type: Exit (orange) > Guard (deep green) > Middle (mint green)
+            const hasExit = d.relays.some(r => r.flags.includes('E'));
+            const hasGuard = d.relays.some(r => r.flags.includes('G'));
+            
+            if (hasExit) return config.relayColors.exit;
+            if (hasGuard) return config.relayColors.guard;
+            return config.relayColors.middle;
+          },
+          getLineColor: [0, 255, 136, 100], // Green outline
+          onClick: handleClick,
+          onHover: handleHover,
+          updateTriggers: {
+            getFillColor: [relayData],
+            getRadius: [relayData, zoom],
+          },
+        })
+      );
+    }
+    
+    return result;
+  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick]);
+
+  // Combine base layers with particle layer (particle layer updates independently)
+  const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
+
+  // Initial Loading state (only shown on first load)
+  if (initialLoading && !relayData) {
+    return (
+      <div className="flex items-center justify-center h-full bg-tor-darker">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-tor-green mx-auto mb-4"></div>
+          <p className="text-gray-400">Loading relay data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state (only shown if no data at all)
+  if (error && !relayData) {
+    return (
+      <div className="flex items-center justify-center h-full bg-tor-darker">
+        <div className="text-center">
+          <div className="text-tor-orange text-4xl mb-4">⚠️</div>
+          <p className="text-gray-400">Failed to load relay data</p>
+          <p className="text-gray-500 text-sm mt-2">{error}</p>
+          <p className="text-gray-600 text-xs mt-4">
+            Run: npx tsx scripts/fetch-tor-data.ts
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative w-full h-full">
+      <DeckGL
+        viewState={viewState}
+        onViewStateChange={({ viewState }) => setViewState(viewState as MapViewState)}
+        controller={true}
+        layers={layers}
+        getCursor={({ isHovering }) => isHovering ? 'pointer' : 'grab'}
+      >
+        <Map
+          mapStyle={config.mapStyle}
+          attributionControl={true}
+        />
+      </DeckGL>
+
+      {/* Hover tooltip */}
+      {hoverInfo && !selectedNode && (
+        <div
+          className="absolute pointer-events-none bg-black/40 backdrop-blur-md text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-tor-green/30 z-10"
+          style={{
+            left: hoverInfo.x + 10,
+            top: hoverInfo.y + 10,
+          }}
+        >
+          <div className="font-medium text-tor-green">{hoverInfo.node.label}</div>
+          <div className="text-gray-400 text-xs">
+            {hoverInfo.node.relays.length} relay{hoverInfo.node.relays.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+      )}
+
+      {/* Relay popup */}
+      {selectedNode && popupPosition && (
+        <RelayPopup
+          node={selectedNode}
+          x={popupPosition.x}
+          y={popupPosition.y}
+          onClose={handleClosePopup}
+        />
+      )}
+
+      {/* Country hover tooltip */}
+      {countryHover && layerVisibility.countries && (
+        <CountryTooltip
+          countryCode={countryHover.code}
+          countryData={countryData}
+          x={countryHover.x}
+          y={countryHover.y}
+        />
+      )}
+
+      {/* Header + Layer Controls - top left */}
+      <div className="absolute top-4 left-4 z-10">
+        <div className="bg-black/40 backdrop-blur-md rounded-lg p-3 border border-tor-green/20">
+          {/* Logo/Title */}
+          <div className="flex items-center gap-2 mb-3 pb-2 border-b border-tor-green/10">
+            <svg className="w-6 h-6" viewBox="0 0 32 32" fill="none">
+              <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2" className="text-tor-green-dark"/>
+              <circle cx="16" cy="16" r="8" stroke="currentColor" strokeWidth="2" className="text-tor-green"/>
+              <circle cx="16" cy="16" r="3" fill="currentColor" className="text-tor-green"/>
+            </svg>
+            <div>
+              <h1 className="text-lg font-bold leading-tight">
+                <span className="text-tor-green">Route</span> <span className="text-white">Flux Map</span>
+              </h1>
+              <p className="text-gray-500 text-[10px]">Visualizing the Tor Network</p>
+            </div>
+          </div>
+          
+          {/* Layer toggles */}
+          <LayerControls
+            visibility={layerVisibility}
+            onVisibilityChange={handleLayerVisibilityChange}
+            showParticles={true}
+            compact={true}
+          />
+        </div>
+      </div>
+
+      {/* Stats panel - bottom right (offset to avoid map credits) */}
+      {relayData && (
+        <div className="absolute bottom-8 right-4 bg-black/40 backdrop-blur-md rounded-lg p-3 border border-tor-green/20 z-10 min-w-[130px]">
+          <div className="text-tor-green text-xl font-bold leading-tight">
+            {relayData.nodes.reduce((sum, n) => sum + n.relays.length, 0).toLocaleString()}
+          </div>
+          <div className="text-gray-400 text-xs">Active Relays</div>
+          <div className="text-gray-500 text-[10px]">
+            {relayData.nodes.length} locations
+          </div>
+          {dateIndex && (
+            <div className="text-gray-600 text-[10px]">
+              {new Date(dateIndex.lastUpdated).toLocaleDateString()}
+            </div>
+          )}
+          
+          {/* Relay Type Legend */}
+          <div className="mt-2 pt-2 border-t border-white/10 space-y-0.5">
+            <div className="text-[9px] text-gray-500 mb-1">Relay Types</div>
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.exit.slice(0, 3).join(',')})` }} />
+              <span className="text-gray-400">Exit</span>
+              <span className="text-gray-600 text-[9px]">– outbound traffic</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.guard.slice(0, 3).join(',')})` }} />
+              <span className="text-gray-400">Guard</span>
+              <span className="text-gray-600 text-[9px]">– entry point</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.middle.slice(0, 3).join(',')})` }} />
+              <span className="text-gray-400">Middle</span>
+              <span className="text-gray-600 text-[9px]">– intermediate</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px] mt-1">
+              <span className="w-2 h-2 rounded-full bg-purple-400" />
+              <span className="text-gray-400">HSDir</span>
+              <span className="text-gray-600 text-[9px]">– hidden services</span>
+            </div>
+          </div>
+          
+          {/* GitHub link */}
+          <a 
+            href="https://github.com/1aeo/routefluxmap"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 pt-2 border-t border-white/10 flex items-center justify-center gap-1 text-gray-500 hover:text-tor-green transition-colors text-[10px]"
+          >
+            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+              <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+            </svg>
+            GitHub
+          </a>
+        </div>
+      )}
+
+      {/* Date controls - bottom center */}
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 max-w-lg w-full px-4">
+        {/* Combined date slider with histogram - only show when multiple dates */}
+        {dateIndex && currentDate && dateIndex.dates.length > 1 && (
+          <DateSliderChart
+            dateIndex={dateIndex}
+            currentDate={currentDate}
+            onDateChange={handleDateChange}
+          />
+        )}
+
+        {/* Single date display (when only one date available) */}
+        {dateIndex && currentDate && dateIndex.dates.length === 1 && (
+          <div className="bg-black/40 backdrop-blur-md rounded-lg px-3 py-2 border border-tor-green/20 text-center">
+            <div className="text-tor-green text-sm font-medium">
+              {new Date(currentDate).toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Zoom controls - bottom left */}
+      <div className="absolute bottom-8 left-4 z-10 flex flex-col gap-1">
+        {/* Settings Toggle */}
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          className={`w-8 h-8 flex items-center justify-center rounded-lg backdrop-blur-md border transition-colors ${
+            showSettings 
+              ? 'bg-tor-green text-black border-tor-green' 
+              : 'bg-black/40 border-tor-green/20 text-tor-green hover:bg-tor-green/20'
+          }`}
+          aria-label="Toggle settings"
+          title="Line Settings"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+        </button>
+
+        {/* Settings Panel (Popup) */}
+        {showSettings && (
+          <div className="absolute bottom-0 left-10 ml-2 bg-black/80 backdrop-blur-md rounded-lg p-3 border border-tor-green/20 w-48 shadow-lg animate-fade-in">
+            <h3 className="text-tor-green text-xs font-bold mb-3 uppercase tracking-wider">Line Settings</h3>
+            
+            {/* Density Slider */}
+            <div className="mb-3">
+              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                <span>Density</span>
+                <span>{(lineDensityFactor * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="3.0"
+                step="0.1"
+                value={lineDensityFactor}
+                onChange={(e) => setLineDensityFactor(parseFloat(e.target.value))}
+                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
+              />
+            </div>
+
+            {/* Opacity Slider */}
+            <div className="mb-3">
+              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                <span>Opacity</span>
+                <span>{(lineOpacityFactor * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="3.0"
+                step="0.1"
+                value={lineOpacityFactor}
+                onChange={(e) => setLineOpacityFactor(parseFloat(e.target.value))}
+                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
+              />
+            </div>
+
+            {/* Speed Slider */}
+            <div>
+              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                <span>Speed</span>
+                <span>{(lineSpeedFactor * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="5.0"
+                step="0.1"
+                value={lineSpeedFactor}
+                onChange={(e) => setLineSpeedFactor(parseFloat(e.target.value))}
+                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
+              />
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={() => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }))}
+          className="w-8 h-8 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green hover:bg-tor-green/20 transition-colors"
+          aria-label="Zoom in"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12M6 12h12" />
+          </svg>
+        </button>
+        <button
+          onClick={() => setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom - 1, 1) }))}
+          className="w-8 h-8 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green hover:bg-tor-green/20 transition-colors"
+          aria-label="Zoom out"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 12h12" />
+          </svg>
+        </button>
+        <div className="text-center text-[9px] text-gray-500 mt-0.5">
+          {viewState.zoom.toFixed(1)}x
+        </div>
+      </div>
+
+      {/* Loading indicator (non-blocking) */}
+      {loading && relayData && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-black/80 backdrop-blur-sm rounded-full px-4 py-2 border border-tor-green/20 flex items-center gap-2">
+          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-tor-green"></div>
+          <span className="text-tor-green text-xs">Loading...</span>
+        </div>
+      )}
+    </div>
+  );
+}

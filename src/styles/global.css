@@ -1,0 +1,164 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base styles */
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  code, pre {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Component styles */
+@layer components {
+  /* Glass panel effect */
+  .glass-panel {
+    @apply bg-black/80 backdrop-blur-sm border border-tor-green/20 rounded-lg;
+  }
+
+  /* Control button */
+  .control-btn {
+    @apply w-10 h-10 bg-black/80 backdrop-blur-sm rounded-full flex items-center justify-center text-tor-green hover:bg-tor-green/10 transition-colors border border-tor-green/20;
+  }
+
+  /* Hover label */
+  .hover-label {
+    @apply absolute z-50 bg-black/90 text-white text-sm px-3 py-2 rounded-lg pointer-events-none shadow-lg border border-tor-green/30;
+  }
+
+  /* Loading spinner */
+  .spinner {
+    @apply animate-spin rounded-full border-t-2 border-b-2 border-tor-green;
+  }
+}
+
+/* Utility classes */
+@layer utilities {
+  /* Gradient text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-tor-green-dark to-tor-green;
+  }
+
+  /* Glow effect */
+  .glow {
+    box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+  }
+
+  /* No scrollbar */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Custom scrollbar - green theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 136, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 136, 0.5);
+}
+
+/* MapLibre GL overrides */
+.maplibregl-map {
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.maplibregl-popup-content {
+  @apply bg-black/90 text-white rounded-lg p-3 shadow-lg border border-tor-green/30;
+}
+
+.maplibregl-popup-close-button {
+  @apply text-white text-xl hover:text-gray-300;
+}
+
+.maplibregl-ctrl-group {
+  @apply bg-black/80 backdrop-blur-sm border border-tor-green/20 rounded-lg overflow-hidden;
+}
+
+.maplibregl-ctrl-group button {
+  @apply bg-transparent border-none text-tor-green hover:bg-tor-green/10;
+}
+
+.maplibregl-ctrl-zoom-in,
+.maplibregl-ctrl-zoom-out {
+  @apply w-8 h-8;
+}
+
+.maplibregl-ctrl-attrib {
+  background-color: rgba(0, 0, 0, 0.7) !important;
+  color: #888 !important;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: #00ff88 !important;
+}
+
+/* Deck.gl tooltip */
+.deck-tooltip {
+  @apply bg-black/90 text-white text-sm px-3 py-2 rounded-lg pointer-events-none shadow-lg border border-tor-green/30;
+}
+
+/* Animation keyframes */
+@keyframes pulse-green {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(0, 255, 136, 0.6);
+  }
+}
+
+.pulse-green {
+  animation: pulse-green 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .hover-label {
+    @apply hidden;
+  }
+}

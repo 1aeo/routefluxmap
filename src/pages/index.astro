@@ -1,0 +1,90 @@
+---
+import Layout from '../layouts/Layout.astro';
+import TorMap from '../components/map/TorMap';
+import { config } from '../lib/config';
+
+const dataUrl = import.meta.env.PUBLIC_DATA_URL || config.dataBaseUrl;
+const metricsUrl = config.metricsUrl;
+---
+
+<Layout title="RouteFluxMap - Tor Network Visualization">
+  <main class="relative h-screen w-screen bg-tor-darker">
+    <!-- Map Component (React Island) - handles its own UI including header/controls -->
+    <TorMap client:load dataUrl={dataUrl} />
+
+    <!-- Info Button -->
+    <button 
+      id="info-btn"
+      class="absolute top-4 right-4 z-20 w-10 h-10 bg-black/80 backdrop-blur-sm rounded-full flex items-center justify-center text-tor-green hover:bg-tor-green/10 transition-colors border border-tor-green/20"
+      aria-label="About RouteFluxMap"
+    >
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    </button>
+
+    <!-- Footer -->
+    <footer class="absolute bottom-4 left-4 z-20 pointer-events-none">
+      <div class="text-gray-500 text-xs">
+        Data from <a href="https://www.torproject.org" target="_blank" rel="noopener" class="text-tor-green hover:underline pointer-events-auto">Tor Project</a>
+        • <a href={metricsUrl} target="_blank" rel="noopener" class="text-tor-green hover:underline pointer-events-auto">Metrics</a>
+      </div>
+    </footer>
+  </main>
+</Layout>
+
+<script>
+  // Info button handler
+  document.getElementById('info-btn')?.addEventListener('click', () => {
+    window.open('/about', '_blank');
+  });
+</script>
+
+<style is:global>
+  /* Fade in animation for popups */
+  .animate-fade-in {
+    animation: fade-in 0.2s ease-out;
+  }
+  
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(5px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* MapLibre attribution styling */
+  .maplibregl-ctrl-attrib {
+    background-color: rgba(0, 0, 0, 0.7) !important;
+    color: #888 !important;
+    font-size: 10px !important;
+  }
+
+  .maplibregl-ctrl-attrib a {
+    color: #00ff88 !important;
+  }
+
+  /* Zoom controls */
+  .maplibregl-ctrl-group {
+    background: rgba(0, 0, 0, 0.8) !important;
+    border: 1px solid rgba(0, 255, 136, 0.2) !important;
+    border-radius: 8px !important;
+  }
+
+  .maplibregl-ctrl-group button {
+    background-color: transparent !important;
+    color: #00ff88 !important;
+  }
+
+  .maplibregl-ctrl-group button:hover {
+    background-color: rgba(0, 255, 136, 0.1) !important;
+  }
+
+  .maplibregl-ctrl-group button + button {
+    border-top: 1px solid rgba(0, 255, 136, 0.2) !important;
+  }
+</style>

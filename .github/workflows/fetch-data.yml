@@ -1,0 +1,52 @@
+name: Fetch Tor Data
+
+on:
+  schedule:
+    # Run every hour at :05 past the hour
+    - cron: '5 * * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  fetch-and-upload:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download MaxMind GeoLite2-City database
+        run: |
+          mkdir -p data/geoip
+          curl -sL "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${{ secrets.MAXMIND_LICENSE_KEY }}&suffix=tar.gz" | tar xz --strip-components=1 -C data/geoip
+        env:
+          MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
+
+      - name: Fetch and process Tor relay data
+        run: npm run fetch-data
+
+      - name: Upload to Cloudflare R2
+        run: npm run upload-data
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      - name: Summary
+        run: |
+          echo "### ✅ Data Update Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Files processed:** $(ls -1 data/output/*.json 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+
+
