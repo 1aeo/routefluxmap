@@ -24,6 +24,7 @@ import RelayPopup from '../ui/RelayPopup';
 import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
+import NoDataToast from '../ui/NoDataToast';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import { useParticleLayer } from './ParticleOverlay';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -117,12 +118,17 @@ export default function TorMap() {
       } else if (index.dates.length > 0) {
         // Default to latest date
         setCurrentDate(index.dates[index.dates.length - 1]);
+      } else {
+        // No dates available - stop loading state
+        setInitialLoading(false);
+        setLoading(false);
       }
       
       return latestNewDate;
     } catch (err: any) {
       setError(err.message);
       setLoading(false);
+      setInitialLoading(false);
       return null;
     }
   }, []);
@@ -331,10 +337,13 @@ export default function TorMap() {
     // TODO: Show country statistics popup
   }, []);
 
-  // Particle layer - smaller dots with opacity
+  // Check if we have actual relay nodes to display
+  const hasRelayNodes = !!(relayData && relayData.nodes && relayData.nodes.length > 0);
+  
+  // Particle layer - smaller dots with opacity (only if we have relay nodes)
   const particleLayers = useParticleLayer({
     nodes: relayData?.nodes ?? [],
-    visible: layerVisibility.particles,
+    visible: layerVisibility.particles && hasRelayNodes,
     particleCount,
     particleSize: 1, // Smaller particles
     speedFactor: lineSpeedFactor,
@@ -362,8 +371,9 @@ export default function TorMap() {
       result.push(countryLayer);
     }
     
-    // Relay layer
-    if (relayData && layerVisibility.relays) {
+    // Relay layer (only if we have actual nodes)
+    const hasNodes = relayData && relayData.nodes && relayData.nodes.length > 0;
+    if (hasNodes && layerVisibility.relays) {
       // Find max relay count for scaling
       const maxRelayCount = Math.max(...relayData.nodes.map(n => n.relays.length), 1);
       const maxBandwidth = relayData.minMax.max;
@@ -461,6 +471,15 @@ export default function TorMap() {
 
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
+      
+      {/* No relay data toast - shown when data was fetched but has no nodes, or no dates available */}
+      {!loading && !initialLoading && (
+        (dateIndex && dateIndex.dates.length === 0) ? (
+          <NoDataToast message="No relay data available" />
+        ) : (relayData && (!relayData.nodes || relayData.nodes.length === 0)) ? (
+          <NoDataToast message="No relay data available for this date" />
+        ) : null
+      )}
 
       {/* Hover tooltip */}
       {hoverInfo && !selectedNode && (

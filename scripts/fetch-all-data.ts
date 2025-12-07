@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * RouteFluxMap - Unified Data Fetcher v3.8.2
+ * RouteFluxMap - Unified Data Fetcher v1.0.0
  * 
  * Single entry point for all Tor network data fetching.
  * Automatically routes to the appropriate data source:
@@ -51,7 +51,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 // Version Information
 // ============================================================================
 
-const SCRIPT_VERSION = '3.8.2';  // Parse lock + -T4 (optimal: same speed as -T0, less RAM)
+const SCRIPT_VERSION = '1.0.0';
 const DATA_FORMAT_VERSION = '2.1';
 
 // Parallel defaults based on workload type
@@ -608,7 +608,7 @@ async function processOnionooRelays(data: OnionooResponse): Promise<ProcessedRel
 // Tracks in-progress downloads and extractions to prevent race conditions
 const downloadLocks: Map<string, Promise<string | null>> = new Map();
 const extractionLocks: Map<string, Promise<string | null>> = new Map();
-const descriptorParseLocks: Map<string, Promise<Map<string, number>>> = new Map();
+const descriptorParseLocks: Map<string, Promise<Map<string, BandwidthEntry[]>>> = new Map();
 
 async function withLock<T>(
   locks: Map<string, Promise<T>>,
@@ -780,8 +780,43 @@ async function ensureDescriptorArchive(year: number, month: number): Promise<str
   });
 }
 
-// Cache for parsed descriptor bandwidth data (fingerprint -> observed_bandwidth)
-const descriptorBandwidthCache: Map<string, Map<string, number>> = new Map();
+// Per-day bandwidth entry: { date: "YYYY-MM-DD", bandwidth: number }
+interface BandwidthEntry {
+  date: string;
+  bandwidth: number;
+}
+
+// Cache for parsed descriptor bandwidth data (fingerprint -> timestamped bandwidths)
+// Each relay has multiple bandwidth entries from descriptors published throughout the month
+const descriptorBandwidthCache: Map<string, Map<string, BandwidthEntry[]>> = new Map();
+
+/**
+ * Get bandwidth for a specific relay on a specific date.
+ * Finds the most recent descriptor published on or before the target date.
+ */
+function getBandwidthForDate(
+  bandwidthMap: Map<string, BandwidthEntry[]>,
+  fingerprint: string,
+  targetDate: string
+): number | undefined {
+  const entries = bandwidthMap.get(fingerprint);
+  if (!entries || entries.length === 0) return undefined;
+  
+  // Entries are sorted by date ascending
+  // Find the last entry where date <= targetDate
+  let result: BandwidthEntry | undefined;
+  for (const entry of entries) {
+    if (entry.date <= targetDate) {
+      result = entry;
+    } else {
+      break; // Past target date, stop searching
+    }
+  }
+  
+  // If no entry found before target date, use the first available
+  // (relay may have published its first descriptor mid-month)
+  return result?.bandwidth ?? entries[0]?.bandwidth;
+}
 
 // Cache for extracted consensus directories (monthStr -> extracted dir path)
 const extractedConsensusCache: Map<string, string> = new Map();
@@ -864,7 +899,7 @@ async function ensureExtractedConsensus(year: number, month: number): Promise<st
   });
 }
 
-async function loadDescriptorBandwidth(year: number, month: number): Promise<Map<string, number>> {
+async function loadDescriptorBandwidth(year: number, month: number): Promise<Map<string, BandwidthEntry[]>> {
   const monthStr = `${year}-${String(month).padStart(2, '0')}`;
   
   // Return in-memory cached if available (fastest - same process)
@@ -892,7 +927,7 @@ async function loadDescriptorBandwidth(year: number, month: number): Promise<Map
   }
 }
 
-async function loadDescriptorBandwidthInternal(year: number, month: number, monthStr: string): Promise<Map<string, number>> {
+async function loadDescriptorBandwidthInternal(year: number, month: number, monthStr: string): Promise<Map<string, BandwidthEntry[]>> {
   // Double-check in-memory cache after acquiring lock (another worker may have finished)
   if (descriptorBandwidthCache.has(monthStr)) {
     console.log(`    ✓ Using in-memory cache (populated by another worker)`);
@@ -900,7 +935,8 @@ async function loadDescriptorBandwidthInternal(year: number, month: number, mont
   }
   
   // OPTIMIZATION 2: Check for JSON cache file (fast - ~50ms vs ~100s parsing)
-  const jsonCachePath = path.join(CACHE_DIR, `bandwidth-cache-${monthStr}.json`);
+  // Use v2 suffix to differentiate from old single-value cache format
+  const jsonCachePath = path.join(CACHE_DIR, `bandwidth-cache-v2-${monthStr}.json`);
   const archivePath = path.join(CACHE_DIR, `server-descriptors-${monthStr}.tar.xz`);
   
   if (fs.existsSync(jsonCachePath)) {
@@ -912,10 +948,13 @@ async function loadDescriptorBandwidthInternal(year: number, month: number, mont
       
       if (!archiveExists || cacheStats.mtime > archiveStats!.mtime) {
         const loadStart = Date.now();
-        const data = JSON.parse(fs.readFileSync(jsonCachePath, 'utf-8'));
-        const bandwidthMap = new Map<string, number>(Object.entries(data).map(([k, v]) => [k, v as number]));
+        const data: Record<string, BandwidthEntry[]> = JSON.parse(fs.readFileSync(jsonCachePath, 'utf-8'));
+        const bandwidthMap = new Map<string, BandwidthEntry[]>(Object.entries(data));
         const elapsed = Date.now() - loadStart;
-        console.log(`    ✓ Loaded bandwidth cache for ${monthStr} (${bandwidthMap.size} relays, ${elapsed}ms)`);
+        // Count total descriptors
+        let totalDesc = 0;
+        for (const entries of bandwidthMap.values()) totalDesc += entries.length;
+        console.log(`    ✓ Loaded bandwidth cache for ${monthStr} (${totalDesc} descriptors, ${bandwidthMap.size} relays, ${elapsed}ms)`);
         descriptorBandwidthCache.set(monthStr, bandwidthMap);
         return bandwidthMap;
       }
@@ -937,7 +976,9 @@ async function loadDescriptorBandwidthInternal(year: number, month: number, mont
   const threadArg = XZ_THREADS === 0 ? '-T0' : `-T${XZ_THREADS}`;
   console.log(`    📄 Parsing server descriptors for ${monthStr} (xz ${threadArg}, single worker)...`);
   const parseStart = Date.now();
-  const bandwidthMap = new Map<string, number>();
+  
+  // New structure: fingerprint -> array of {date, bandwidth} entries
+  const bandwidthMap = new Map<string, BandwidthEntry[]>();
   
   return new Promise((resolve) => {
     // Parse lock ensures only 1 xz runs at a time
@@ -962,45 +1003,82 @@ async function loadDescriptorBandwidthInternal(year: number, month: number, mont
       crlfDelay: Infinity
     });
 
+    // Track current descriptor being parsed
     let currentFingerprint: string | null = null;
+    let currentPublished: string | null = null;
+    let currentBandwidth: number | null = null;
+    let totalDescriptors = 0;
 
     rl.on('line', (line) => {
       // Optimization: check start of line before running regex
-      if (line.startsWith('fingerprint ')) {
+      if (line.startsWith('@type ')) {
+        // Save previous descriptor if complete
+        if (currentFingerprint && currentPublished && currentBandwidth !== null) {
+          if (!bandwidthMap.has(currentFingerprint)) {
+            bandwidthMap.set(currentFingerprint, []);
+          }
+          bandwidthMap.get(currentFingerprint)!.push({
+            date: currentPublished,
+            bandwidth: currentBandwidth,
+          });
+          totalDescriptors++;
+        }
+        // Reset for new descriptor
+        currentFingerprint = null;
+        currentPublished = null;
+        currentBandwidth = null;
+      } else if (line.startsWith('fingerprint ')) {
         const match = line.match(/^fingerprint\s+([\dA-F\s]+)/i);
         if (match) {
           currentFingerprint = match[1].trim().replace(/\s+/g, '').toUpperCase();
+        }
+      } else if (line.startsWith('published ')) {
+        // Format: published YYYY-MM-DD HH:MM:SS
+        const match = line.match(/^published\s+(\d{4}-\d{2}-\d{2})/);
+        if (match) {
+          currentPublished = match[1];
         }
       } else if (line.startsWith('bandwidth ') && currentFingerprint) {
         const match = line.match(/^bandwidth\s+\d+\s+\d+\s+(\d+)/);
         if (match) {
           const observedBandwidth = parseInt(match[1], 10);
           // Filter out bogus values: INT_MAX (2^31-1 = 2147483647) indicates overflow
-          if (observedBandwidth >= 2147483647) {
-            currentFingerprint = null;
-            return;
+          if (observedBandwidth < 2147483647) {
+            currentBandwidth = observedBandwidth;
           }
-          // Keep the highest observed bandwidth for each relay
-          const existing = bandwidthMap.get(currentFingerprint) || 0;
-          if (observedBandwidth > existing) {
-            bandwidthMap.set(currentFingerprint, observedBandwidth);
-          }
-          currentFingerprint = null;
         }
-      } else if (line.startsWith('@type ')) {
-        // Reset on new descriptor boundary
-        currentFingerprint = null;
       }
     });
 
     rl.on('close', () => {
+      // Don't forget the last descriptor
+      if (currentFingerprint && currentPublished && currentBandwidth !== null) {
+        if (!bandwidthMap.has(currentFingerprint)) {
+          bandwidthMap.set(currentFingerprint, []);
+        }
+        bandwidthMap.get(currentFingerprint)!.push({
+          date: currentPublished,
+          bandwidth: currentBandwidth,
+        });
+        totalDescriptors++;
+      }
+      
+      // Sort each relay's entries by date for efficient lookup
+      for (const entries of bandwidthMap.values()) {
+        entries.sort((a, b) => a.date.localeCompare(b.date));
+      }
+      
       const elapsed = ((Date.now() - parseStart) / 1000).toFixed(1);
-      console.log(`    ✓ Parsed ${bandwidthMap.size} relay bandwidths (${elapsed}s)`);
+      console.log(`    ✓ Parsed ${totalDescriptors} descriptors for ${bandwidthMap.size} relays (${elapsed}s)`);
       
       // OPTIMIZATION 2: Save to JSON cache for future runs
       if (bandwidthMap.size > 0) {
         try {
-          const cacheData = Object.fromEntries(bandwidthMap);
+          // Convert Map to serializable object
+          const cacheData: Record<string, BandwidthEntry[]> = {};
+          for (const [fp, entries] of bandwidthMap) {
+            cacheData[fp] = entries;
+          }
           fs.writeFileSync(jsonCachePath, JSON.stringify(cacheData));
           const cacheSizeKB = Math.round(fs.statSync(jsonCachePath).size / 1024);
           console.log(`    ✓ Saved bandwidth cache (${cacheSizeKB}KB)`);
@@ -1173,21 +1251,23 @@ async function fetchCollectorRelaysWithTiming(dateStr: string, steps: StepTiming
     
     if (relays.length === 0) return null;
     
-    // Join with real bandwidth from descriptors and geolocate
+    // Single-pass: bandwidth lookup + maxBw calculation + geolocate + aggregate
     const geoStart = Date.now();
     
-    // Get real bandwidth for each relay from descriptors
+    // Pass 1: Get bandwidth for each relay and find maxBw
     let matchedBandwidth = 0;
+    let maxBw = 0;
     for (const relay of relays) {
-      const realBw = bandwidthMap.get(relay.fingerprint);
+      const realBw = getBandwidthForDate(bandwidthMap, relay.fingerprint, dateStr);
       if (realBw !== undefined) {
         relay.bandwidth = realBw;
         matchedBandwidth++;
       }
-      // If no match, keep consensus weight as fallback
+      maxBw = Math.max(maxBw, relay.bandwidth || 0);
     }
+    if (maxBw === 0) maxBw = 1; // Avoid division by zero
     
-    const maxBw = Math.max(...relays.map(r => r.bandwidth || 0), 1);
+    // Pass 2: Geolocate and aggregate (uses maxBw for normalization)
     const aggregated: Map<string, { lat: number; lng: number; relays: RelayInfo[] }> = new Map();
     let geolocated = 0;
     
@@ -1226,14 +1306,113 @@ async function fetchCollectorRelaysWithTiming(dateStr: string, steps: StepTiming
 }
 
 // ============================================================================
-// Data Source: Tor Metrics (Country Data)
+// Data Source: Tor Metrics (Country Data) - Batch Monthly Fetching
 // ============================================================================
 
-function fetchCountryClientsOnce(date: string): Promise<CountryData> {
+// Cache for monthly country data: monthStr -> Map<dateStr, CountryData>
+const monthlyCountryCache: Map<string, Map<string, CountryData>> = new Map();
+
+// Flag to control batch vs daily country fetching
+// Set based on total days being processed (batch is only efficient for multi-day runs)
+let USE_BATCH_COUNTRY_FETCH = true;
+
+/**
+ * Fetch country data for an entire month in one request.
+ * Much more efficient than daily requests (1 request vs ~30 requests).
+ */
+function fetchMonthlyCountryDataOnce(year: number, month: number): Promise<Map<string, CountryData>> {
+  return new Promise((resolve, reject) => {
+    const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+    const startDate = `${monthStr}-01`;
+    
+    // Get last day of month
+    const lastDay = new Date(year, month, 0).getDate();
+    const endDate = `${monthStr}-${String(lastDay).padStart(2, '0')}`;
+    
+    const url = `https://metrics.torproject.org/userstats-relay-country.csv?start=${startDate}&end=${endDate}`;
+    
+    // Set a longer timeout for monthly requests (larger response)
+    const req = https.get(url, { timeout: 120000 }, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        const lines = data.split('\n').filter(l => 
+          l && !l.startsWith('#') && !l.startsWith('date,')
+        );
+        
+        // Group by date: { "2025-01-01": { countries: {}, totalUsers: 0 }, ... }
+        const byDate: Map<string, { countries: { [code: string]: number }; totalUsers: number; countrySum: number }> = new Map();
+        
+        for (const line of lines) {
+          const parts = line.split(',');
+          if (parts.length < 3) continue;
+          
+          const [dateStr, countryRaw = '', usersStr] = parts;
+          const users = parseInt(usersStr, 10);
+          if (isNaN(users) || !dateStr) continue;
+          
+          // Initialize date entry if needed
+          if (!byDate.has(dateStr)) {
+            byDate.set(dateStr, { countries: {}, totalUsers: 0, countrySum: 0 });
+          }
+          const entry = byDate.get(dateStr)!;
+          
+          const country = countryRaw.trim();
+          
+          // Empty country field is the aggregate total
+          if (country === '') {
+            entry.totalUsers = users;
+            continue;
+          }
+          
+          // Skip unknown countries
+          const normalized = country.toUpperCase();
+          if (normalized === '??' || normalized === '') continue;
+          
+          entry.countries[normalized] = users;
+          entry.countrySum += users;
+        }
+        
+        // Convert to CountryData objects
+        const result = new Map<string, CountryData>();
+        for (const [dateStr, entry] of byDate) {
+          result.set(dateStr, {
+            version: {
+              script: SCRIPT_VERSION,
+              dataFormat: DATA_FORMAT_VERSION,
+              generatedAt: new Date().toISOString(),
+            },
+            date: dateStr,
+            totalUsers: entry.totalUsers || entry.countrySum,
+            countries: entry.countries,
+          });
+        }
+        
+        resolve(result);
+      });
+    });
+    
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timeout (120s)'));
+    });
+  });
+}
+
+/**
+ * Fetch country data for a single day (fallback when batch fails).
+ */
+function fetchDailyCountryDataOnce(date: string): Promise<CountryData> {
   return new Promise((resolve, reject) => {
     const url = `https://metrics.torproject.org/userstats-relay-country.csv?start=${date}&end=${date}`;
     
-    https.get(url, (res) => {
+    https.get(url, { timeout: 30000 }, (res) => {
       if (res.statusCode !== 200) {
         reject(new Error(`HTTP ${res.statusCode}`));
         return;
@@ -1261,14 +1440,12 @@ function fetchCountryClientsOnce(date: string): Promise<CountryData> {
           
           const country = countryRaw.trim();
           
-          // Empty country field is the aggregate total
           if (country === '') {
             totalUsers = users;
             hasAggregateRow = true;
             continue;
           }
           
-          // Skip unknown countries
           const normalized = country.toUpperCase();
           if (normalized === '??' || normalized === '') continue;
           
@@ -1276,7 +1453,6 @@ function fetchCountryClientsOnce(date: string): Promise<CountryData> {
           countrySum += users;
         }
         
-        // If no aggregate row, sum the countries
         if (!hasAggregateRow) {
           totalUsers = countrySum;
         }
@@ -1296,8 +1472,64 @@ function fetchCountryClientsOnce(date: string): Promise<CountryData> {
   });
 }
 
+/**
+ * Load monthly country data with caching.
+ * Tries batch request first, falls back to daily if batch fails.
+ */
+async function loadMonthlyCountryData(year: number, month: number): Promise<Map<string, CountryData>> {
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  
+  // Return from cache if available
+  if (monthlyCountryCache.has(monthStr)) {
+    return monthlyCountryCache.get(monthStr)!;
+  }
+  
+  // Try batch request with retries
+  try {
+    const data = await withRetry(
+      () => fetchMonthlyCountryDataOnce(year, month),
+      `Monthly country data ${monthStr}`,
+      3  // 3 retries for batch
+    );
+    
+    if (data.size > 0) {
+      console.log(`    ✓ Loaded country data for ${monthStr} (${data.size} days, batch)`);
+      monthlyCountryCache.set(monthStr, data);
+      return data;
+    }
+  } catch (e: any) {
+    console.log(`    ⚠ Batch country fetch failed for ${monthStr}: ${e.message}`);
+    console.log(`    ↳ Falling back to daily requests`);
+  }
+  
+  // Return empty map - will fall back to daily requests
+  const emptyMap = new Map<string, CountryData>();
+  monthlyCountryCache.set(monthStr, emptyMap);
+  return emptyMap;
+}
+
+/**
+ * Get country data for a specific date.
+ * For multi-day runs: uses batch monthly requests with caching.
+ * For single-day runs: uses direct daily request (more efficient).
+ */
 async function fetchCountryClients(date: string): Promise<CountryData> {
-  return withRetry(() => fetchCountryClientsOnce(date), `Country data ${date}`, 2);
+  // For single-day runs, skip batch and fetch directly
+  if (!USE_BATCH_COUNTRY_FETCH) {
+    return withRetry(() => fetchDailyCountryDataOnce(date), `Country data ${date}`, 2);
+  }
+  
+  const [year, month] = date.split('-').map(Number);
+  
+  // Try to get from monthly cache
+  const monthlyData = await loadMonthlyCountryData(year, month);
+  
+  if (monthlyData.has(date)) {
+    return monthlyData.get(date)!;
+  }
+  
+  // Fallback to daily request with retries
+  return withRetry(() => fetchDailyCountryDataOnce(date), `Country data ${date}`, 2);
 }
 
 // ============================================================================
@@ -1516,6 +1748,11 @@ async function processDate(dateStr: string): Promise<void> {
   // Print timing summary for this date
   const stepSummary = steps.map(s => `${s.step}:${formatDuration(s.durationMs)}`).join(' ');
   console.log(`    ⏱ Total: ${formatDuration(totalMs)} [${stepSummary}]`);
+  
+  // Incrementally update index after each successful day
+  if (relayData) {
+    updateIndex();
+  }
 }
 
 // ============================================================================
@@ -1579,6 +1816,9 @@ async function main() {
   
   const targetDates = generateDatesInRange(dateRange);
   
+  // Use batch country fetching for multi-day runs (7+ days), daily for single/few days
+  USE_BATCH_COUNTRY_FETCH = targetDates.length >= 7;
+  
   console.log('  Configuration:');
   console.log(`    Script version:  ${SCRIPT_VERSION}`);
   console.log(`    Data format:     ${DATA_FORMAT_VERSION}`);
@@ -1586,6 +1826,7 @@ async function main() {
   console.log(`    Dates to fetch:  ${targetDates.length}`);
   console.log(`    Parallel:        ${parallel}`);
   console.log(`    XZ threads:      ${XZ_THREADS === 0 ? '0 (all cores)' : XZ_THREADS}`);
+  console.log(`    Country fetch:   ${USE_BATCH_COUNTRY_FETCH ? 'batch (monthly)' : 'daily'}`);
   console.log(`    GeoIP database:  ${GEOIP_DB_PATH}`);
   console.log(`    Cache:           ${CACHE_DIR}`);
   console.log(`    Output:          ${OUTPUT_DIR}`);
@@ -1627,7 +1868,7 @@ async function main() {
   console.log('\n━━━ Cleanup ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   cleanupExtractedFiles();
   
-  // Update index
+  // Update index (final update ensures consistency after parallel processing)
   console.log('\n━━━ Updating Index ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   updateIndex();
   console.log('  ✓ Index updated');
