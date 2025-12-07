@@ -1,0 +1,9 @@
+# Pre-push hook: Full validation before pushing to remote
+# Runs typecheck + tests (~15 seconds total)
+
+echo "🔍 Running pre-push checks..."
+
+npm run typecheck && npm test
+
+echo "✅ All checks passed!"
+

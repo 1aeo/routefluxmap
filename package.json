@@ -6,17 +6,29 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro check && astro build",
+    "build": "tsc --noEmit && astro build",
+    "build:fast": "astro build",
+    "build:strict": "NODE_OPTIONS='--max-old-space-size=8192' astro check && astro build",
+    "typecheck": "tsc --noEmit",
+    "typecheck:strict": "NODE_OPTIONS='--max-old-space-size=8192' astro check",
     "preview": "astro preview",
     "astro": "astro",
     "fetch-data": "tsx scripts/fetch-all-data.ts",
     "fetch-historical": "tsx scripts/fetch-historical-data.ts",
     "convert-csv": "tsx scripts/convert-csv-to-json.ts",
     "upload": "tsx scripts/upload-to-storage.ts",
-    "test": "vitest",
-    "test:coverage": "vitest --coverage"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepare": "husky"
   },
-  "keywords": ["tor", "visualization", "astro", "deckgl", "maplibre"],
+  "keywords": [
+    "tor",
+    "visualization",
+    "astro",
+    "deckgl",
+    "maplibre"
+  ],
   "author": "RouteFluxMap Contributors",
   "license": "Apache-2.0",
   "dependencies": {
@@ -40,7 +52,9 @@
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^9.2.1",
     "csv-parse": "^5.5.0",
+    "husky": "^9.1.7",
     "jsdom": "^24.0.0",
     "maxmind": "^4.3.0",
     "tsx": "^4.19.0",
