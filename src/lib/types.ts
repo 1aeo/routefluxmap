@@ -26,19 +26,32 @@ export interface AggregatedNode {
 
 // Date index from storage
 export interface DateIndex {
+  version?: {
+    script: string;
+    dataFormat: string;
+  };
   lastUpdated: string;
   dates: string[];
   bandwidths: number[];
-  min: { date: string; bandwidth: number };
-  max: { date: string; bandwidth: number };
-  relayCount: number;
+  // Optional fields (computed from bandwidths array if needed)
+  min?: { date: string; bandwidth: number };
+  max?: { date: string; bandwidth: number };
+  relayCount?: number;
 }
 
 // Relay data for a specific date
 export interface RelayData {
+  version?: {
+    script: string;
+    dataFormat: string;
+    generatedAt: string;
+    source: 'onionoo' | 'collector';
+  };
   published: string;
   nodes: AggregatedNode[];
   bandwidth: number;
+  relayCount?: number;
+  geolocatedCount?: number;
   minMax: { min: number; max: number };
 }
 

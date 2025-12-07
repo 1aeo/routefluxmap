@@ -5,9 +5,47 @@
 
 set -euo pipefail
 
+# ============================================================================
+# Environment Setup (Required for cron which runs with minimal PATH)
+# ============================================================================
+export HOME="${HOME:-/home/tor}"
+export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/bin:$HOME/.nvm/versions/node/$(ls -1 $HOME/.nvm/versions/node 2>/dev/null | tail -1)/bin:/usr/local/node/bin:$PATH"
+
+# Ensure node is available (try common locations)
+if ! command -v node &>/dev/null; then
+    for node_path in "$HOME/.nvm/versions/node"/*/bin "$HOME/.local/bin" "/usr/local/bin"; do
+        if [[ -x "$node_path/node" ]]; then
+            export PATH="$node_path:$PATH"
+            break
+        fi
+    done
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$(dirname "$DEPLOY_DIR")"
+
+# ============================================================================
+# Lock File (prevent overlapping runs)
+# ============================================================================
+LOCK_FILE="$DEPLOY_DIR/logs/.update.lock"
+mkdir -p "$DEPLOY_DIR/logs"
+
+cleanup() {
+    rm -f "$LOCK_FILE"
+}
+trap cleanup EXIT
+
+if [[ -f "$LOCK_FILE" ]]; then
+    LOCK_PID=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+    if [[ -n "$LOCK_PID" ]] && kill -0 "$LOCK_PID" 2>/dev/null; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠️ Another update is running (PID $LOCK_PID), skipping"
+        exit 0
+    fi
+    # Stale lock file, remove it
+    rm -f "$LOCK_FILE"
+fi
+echo $$ > "$LOCK_FILE"
 
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     source "$DEPLOY_DIR/config.env"
@@ -36,7 +74,22 @@ log "  Storage order: $STORAGE_ORDER"
 log "  Output dir:    $OUTPUT_DIR"
 log ""
 
-# Step 1: Fetch all data (relay data + country data + geolocation)
+# Step 1: Verify dependencies
+if ! command -v node &>/dev/null; then
+    log "❌ Node.js not found in PATH"
+    log "   PATH=$PATH"
+    log "   Ensure Node.js is installed and accessible"
+    exit 1
+fi
+
+if ! command -v npx &>/dev/null; then
+    log "❌ npx not found in PATH"
+    exit 1
+fi
+
+log "📦 Using Node.js $(node --version)"
+
+# Step 2: Fetch all data (relay data + country data + geolocation)
 log "📡 Fetching Tor network data..."
 cd "$PROJECT_DIR"
 
@@ -47,7 +100,14 @@ else
     exit 1
 fi
 
-# Step 2: Upload to storage backends (parallel)
+# Step 3: Upload to storage backends (parallel)
+if [[ "$R2_ENABLED" != "true" ]] && [[ "$DO_ENABLED" != "true" ]]; then
+    log "⚠️ No storage backends enabled (R2_ENABLED=$R2_ENABLED, DO_ENABLED=$DO_ENABLED)"
+    log "   Data fetched successfully but not uploaded"
+    log "   Set R2_ENABLED=true and/or DO_ENABLED=true in config.env"
+    exit 0
+fi
+
 R2_PID=""
 DO_PID=""
 

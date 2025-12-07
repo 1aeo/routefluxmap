@@ -4,14 +4,19 @@
  * Uses the ParticleSystem to animate particles flowing between relay nodes.
  * Renders using Deck.gl ScatterplotLayer with frequent position updates.
  * Also renders LineLayer for traffic paths.
+ * 
+ * Features smooth fade transitions when switching between days.
  */
 
-import { useEffect, useRef, useMemo, useState } from 'react';
+import { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { ScatterplotLayer, LineLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
 import type { AggregatedNode } from '../../lib/types';
 import { ParticleSystem, type ParticleState } from '../../lib/particles/particle-system';
 import { config } from '../../lib/config';
+
+// Transition duration in milliseconds
+const TRANSITION_DURATION_MS = 400;
 
 export interface ParticleOverlayProps {
   nodes: AggregatedNode[];
@@ -66,6 +71,40 @@ export function useParticleLayer({
   // Use a tick counter to trigger layer updates at a controlled rate
   const [tick, setTick] = useState(0);
   const [systemReady, setSystemReady] = useState(false);
+  
+  // Transition state for smooth fading between days
+  const [transitionOpacity, setTransitionOpacity] = useState(1);
+  const transitionRef = useRef<{ startTime: number; animationId: number | null }>({ startTime: 0, animationId: null });
+  const prevNodesRef = useRef<AggregatedNode[]>([]);
+
+  // Handle transition animation
+  const startTransition = useCallback(() => {
+    // Cancel any existing transition
+    if (transitionRef.current.animationId !== null) {
+      cancelAnimationFrame(transitionRef.current.animationId);
+    }
+    
+    // Start fade-in from 0
+    setTransitionOpacity(0);
+    transitionRef.current.startTime = performance.now();
+    
+    const animateTransition = () => {
+      const elapsed = performance.now() - transitionRef.current.startTime;
+      const progress = Math.min(1, elapsed / TRANSITION_DURATION_MS);
+      
+      // Ease-out curve for smooth appearance
+      const easedProgress = 1 - Math.pow(1 - progress, 3);
+      setTransitionOpacity(easedProgress);
+      
+      if (progress < 1) {
+        transitionRef.current.animationId = requestAnimationFrame(animateTransition);
+      } else {
+        transitionRef.current.animationId = null;
+      }
+    };
+    
+    transitionRef.current.animationId = requestAnimationFrame(animateTransition);
+  }, []);
 
   // Initialize particle system when nodes change
   useEffect(() => {
@@ -76,6 +115,13 @@ export function useParticleLayer({
       setSystemReady(false);
       return;
     }
+    
+    // Check if this is a significant node change (different day's data)
+    const nodesChanged = prevNodesRef.current.length > 0 && 
+      (nodes.length !== prevNodesRef.current.length || 
+       (nodes[0] && prevNodesRef.current[0] && nodes[0].lat !== prevNodesRef.current[0].lat));
+    
+    prevNodesRef.current = nodes;
 
     const system = new ParticleSystem();
     system.initialize(nodes, particleCount, {
@@ -90,7 +136,21 @@ export function useParticleLayer({
     pathsRef.current = system.getActivePaths();
     setSystemReady(true);
     setTick(t => t + 1); // Trigger initial render
-  }, [nodes, particleCount, hiddenServiceProbability, offsetFactor, speedFactor]);
+    
+    // Start fade-in transition if nodes changed
+    if (nodesChanged) {
+      startTransition();
+    }
+  }, [nodes, particleCount, hiddenServiceProbability, offsetFactor, speedFactor, startTransition]);
+  
+  // Cleanup transition on unmount
+  useEffect(() => {
+    return () => {
+      if (transitionRef.current.animationId !== null) {
+        cancelAnimationFrame(transitionRef.current.animationId);
+      }
+    };
+  }, []);
 
   // Animation loop - update positions every frame but only trigger React updates every N frames
   useEffect(() => {
@@ -163,6 +223,9 @@ export function useParticleLayer({
     }
 
     const result: Layer[] = [];
+    
+    // Apply transition opacity to all elements
+    const effectiveOpacity = transitionOpacity;
 
     // Line layer for connections
     // Only show if we have paths
@@ -211,13 +274,13 @@ export function useParticleLayer({
               // Non-linear scaling to make low counts visible but faint
               let alpha = 8 + Math.min(72, Math.floor(Math.pow(normalized, 0.5) * 72));
               
-              // Apply opacity factor
-              alpha = Math.min(255, Math.max(0, Math.round(alpha * lineOpacityFactor)));
+              // Apply opacity factor and transition
+              alpha = Math.min(255, Math.max(0, Math.round(alpha * lineOpacityFactor * effectiveOpacity)));
               
               return [lineColor[0], lineColor[1], lineColor[2], alpha];
             },
             updateTriggers: {
-              getColor: [tick, lineOpacityFactor, trafficType], // Update colors when traffic type changes
+              getColor: [tick, lineOpacityFactor, trafficType, effectiveOpacity], // Update colors when traffic type or transition changes
             }
           })
         );
@@ -230,7 +293,7 @@ export function useParticleLayer({
         id: 'particle-layer',
         data: filteredPositions,
         pickable: false,
-        opacity: 0.8,
+        opacity: 0.8 * effectiveOpacity, // Apply transition opacity
         stroked: false,
         filled: true,
         radiusScale: 1,
@@ -243,12 +306,13 @@ export function useParticleLayer({
         // Optimize for frequent updates
         updateTriggers: {
           getPosition: [tick],
+          opacity: [effectiveOpacity],
         },
       })
     );
 
     return result;
-  }, [visible, filteredPositions, particleSize, tick, lineDensityFactor, lineOpacityFactor, trafficType]);
+  }, [visible, filteredPositions, particleSize, tick, lineDensityFactor, lineOpacityFactor, trafficType, transitionOpacity]);
 
   return layers;
 }

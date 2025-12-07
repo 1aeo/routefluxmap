@@ -3,7 +3,7 @@
  * Uses Deck.gl for relay markers + MapLibre GL for base map
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
 import { ScatterplotLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl/maplibre';
@@ -12,6 +12,9 @@ import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHist
 import { config } from '../../lib/config';
 import { parseUrlHash } from '../../lib/utils/url';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
+
+// Transition duration for relay dot fading
+const RELAY_TRANSITION_MS = 400;
 import {
   calculateNodeRadius,
   calculateZoomScale,
@@ -20,6 +23,7 @@ import {
 import RelayPopup from '../ui/RelayPopup';
 import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
+import UpdateNotification from '../ui/UpdateNotification';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import { useParticleLayer } from './ParticleOverlay';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -60,6 +64,11 @@ export default function TorMap() {
   const [lineSpeedFactor, setLineSpeedFactor] = useState(2.0); // 200% of original speed
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
+  
+  // Relay transition state for smooth fading
+  const [relayOpacity, setRelayOpacity] = useState(1);
+  const relayTransitionRef = useRef<{ animationId: number | null; startTime: number }>({ animationId: null, startTime: 0 });
+  const prevRelayDataRef = useRef<RelayData | null>(null);
 
   // Clear hover/popup when relay layer is hidden
   const handleLayerVisibilityChange = useCallback((newVisibility: LayerVisibility) => {
@@ -80,33 +89,54 @@ export default function TorMap() {
   const [countryData, setCountryData] = useState<CountryHistogram>({});
   const [countryGeojson, setCountryGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [countryHover, setCountryHover] = useState<{ code: string; x: number; y: number } | null>(null);
+  
+  // Track previously known dates to detect new ones
+  const prevDatesRef = useRef<string[]>([]);
 
-  // Fetch date index (with primary/fallback support)
-  useEffect(() => {
-    async function fetchIndex() {
-      try {
-        const { data: index, source } = await fetchWithFallback<DateIndex>('index.json');
-        if (source === 'fallback') {
-          console.info('[TorMap] Using fallback data source for index');
-        }
-        setDateIndex(index);
-        
-        // Check URL hash for initial date
-        const urlParams = parseUrlHash();
-        if (urlParams.date && index.dates.includes(urlParams.date)) {
-          setCurrentDate(urlParams.date);
-        } else if (index.dates.length > 0) {
-          // Default to latest date
-          setCurrentDate(index.dates[index.dates.length - 1]);
-        }
-      } catch (err: any) {
-        setError(err.message);
-        setLoading(false);
+  // Fetch index and return new date if found
+  const fetchIndexData = useCallback(async (): Promise<string | null> => {
+    try {
+      const { data: index, source } = await fetchWithFallback<DateIndex>('index.json');
+      if (source === 'fallback') {
+        console.info('[TorMap] Using fallback data source for index');
       }
+      
+      // Check for new dates
+      const prevDates = prevDatesRef.current;
+      const newDates = index.dates.filter(d => !prevDates.includes(d));
+      const latestNewDate = newDates.length > 0 ? newDates[newDates.length - 1] : null;
+      
+      // Update tracking
+      prevDatesRef.current = index.dates;
+      setDateIndex(index);
+      
+      // Check URL hash for initial date
+      const urlParams = parseUrlHash();
+      if (urlParams.date && index.dates.includes(urlParams.date)) {
+        setCurrentDate(urlParams.date);
+      } else if (index.dates.length > 0) {
+        // Default to latest date
+        setCurrentDate(index.dates[index.dates.length - 1]);
+      }
+      
+      return latestNewDate;
+    } catch (err: any) {
+      setError(err.message);
+      setLoading(false);
+      return null;
     }
-    
-    fetchIndex();
   }, []);
+
+  // Handle refresh when new data is detected - returns new date if found
+  const handleDataRefresh = useCallback(async (): Promise<string | null> => {
+    console.info('[TorMap] Refreshing data...');
+    return await fetchIndexData();
+  }, [fetchIndexData]);
+
+  // Initial fetch on mount
+  useEffect(() => {
+    fetchIndexData();
+  }, [fetchIndexData]);
 
   // Listen for URL hash changes
   useEffect(() => {
@@ -168,6 +198,35 @@ export default function TorMap() {
     loadCountryData();
   }, [currentDate]);
 
+  // Trigger relay fade-in transition
+  const startRelayTransition = useCallback(() => {
+    // Cancel any existing transition
+    if (relayTransitionRef.current.animationId !== null) {
+      cancelAnimationFrame(relayTransitionRef.current.animationId);
+    }
+    
+    // Start fade-in from 0
+    setRelayOpacity(0);
+    relayTransitionRef.current.startTime = performance.now();
+    
+    const animateTransition = () => {
+      const elapsed = performance.now() - relayTransitionRef.current.startTime;
+      const progress = Math.min(1, elapsed / RELAY_TRANSITION_MS);
+      
+      // Ease-out curve for smooth appearance
+      const easedProgress = 1 - Math.pow(1 - progress, 3);
+      setRelayOpacity(easedProgress);
+      
+      if (progress < 1) {
+        relayTransitionRef.current.animationId = requestAnimationFrame(animateTransition);
+      } else {
+        relayTransitionRef.current.animationId = null;
+      }
+    };
+    
+    relayTransitionRef.current.animationId = requestAnimationFrame(animateTransition);
+  }, []);
+
   // Fetch relay data when date changes (with primary/fallback support)
   useEffect(() => {
     if (!currentDate) return;
@@ -187,8 +246,18 @@ export default function TorMap() {
           console.info(`[TorMap] Using fallback for relay data ${currentDate}`);
         }
         
+        // Check if data actually changed (different day)
+        const dataChanged = prevRelayDataRef.current !== null && 
+          prevRelayDataRef.current.published !== result.data.published;
+        
+        prevRelayDataRef.current = result.data;
         setRelayData(result.data);
         setError(null);
+        
+        // Trigger fade-in if data changed
+        if (dataChanged) {
+          startRelayTransition();
+        }
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -198,7 +267,16 @@ export default function TorMap() {
     }
 
     fetchRelays();
-  }, [currentDate]);
+  }, [currentDate, startRelayTransition]);
+  
+  // Cleanup relay transition on unmount
+  useEffect(() => {
+    return () => {
+      if (relayTransitionRef.current.animationId !== null) {
+        cancelAnimationFrame(relayTransitionRef.current.animationId);
+      }
+    };
+  }, []);
 
   // Handle date change from slider
   const handleDateChange = useCallback((date: string) => {
@@ -300,7 +378,7 @@ export default function TorMap() {
           id: 'relays',
           data: relayData.nodes,
           pickable: true,
-          opacity: 0.85,
+          opacity: 0.85 * relayOpacity, // Apply transition opacity
           stroked: true,
           filled: true,
           radiusScale: zoomScale,
@@ -319,19 +397,21 @@ export default function TorMap() {
             if (hasGuard) return config.relayColors.guard;
             return config.relayColors.middle;
           },
-          getLineColor: [0, 255, 136, 100], // Green outline
+          getLineColor: [0, 255, 136, Math.round(100 * relayOpacity)], // Green outline with transition opacity
           onClick: handleClick,
           onHover: handleHover,
           updateTriggers: {
             getFillColor: [relayData],
             getRadius: [relayData, zoom],
+            opacity: [relayOpacity],
+            getLineColor: [relayOpacity],
           },
         })
       );
     }
     
     return result;
-  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick]);
+  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick, relayOpacity]);
 
   // Combine base layers with particle layer (particle layer updates independently)
   const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
@@ -378,6 +458,9 @@ export default function TorMap() {
           attributionControl={true}
         />
       </DeckGL>
+
+      {/* Update notification */}
+      <UpdateNotification onRefresh={handleDataRefresh} />
 
       {/* Hover tooltip */}
       {hoverInfo && !selectedNode && (
@@ -499,30 +582,32 @@ export default function TorMap() {
         </div>
       )}
 
-      {/* Date controls - bottom center */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 max-w-lg w-full px-4">
-        {/* Combined date slider with histogram - only show when multiple dates */}
-        {dateIndex && currentDate && dateIndex.dates.length > 1 && (
-          <DateSliderChart
-            dateIndex={dateIndex}
-            currentDate={currentDate}
-            onDateChange={handleDateChange}
-          />
-        )}
+      {/* Date controls - bottom center with proper spacing from side content */}
+      <div className="absolute bottom-4 left-0 right-0 z-10 flex justify-center pointer-events-none">
+        <div className="pointer-events-auto">
+          {/* Combined date slider with histogram - only show when multiple dates */}
+          {dateIndex && currentDate && dateIndex.dates.length > 1 && (
+            <DateSliderChart
+              dateIndex={dateIndex}
+              currentDate={currentDate}
+              onDateChange={handleDateChange}
+            />
+          )}
 
-        {/* Single date display (when only one date available) */}
-        {dateIndex && currentDate && dateIndex.dates.length === 1 && (
-          <div className="bg-black/40 backdrop-blur-md rounded-lg px-3 py-2 border border-tor-green/20 text-center">
-            <div className="text-tor-green text-sm font-medium">
-              {new Date(currentDate).toLocaleDateString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })}
+          {/* Single date display (when only one date available) */}
+          {dateIndex && currentDate && dateIndex.dates.length === 1 && (
+            <div className="bg-black/40 backdrop-blur-md rounded-lg px-3 py-2 border border-tor-green/20 text-center">
+              <div className="text-tor-green text-sm font-medium">
+                {new Date(currentDate).toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Zoom controls - bottom left */}

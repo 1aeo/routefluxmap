@@ -119,3 +119,95 @@ export function getDataUrlConfig() {
   };
 }
 
+// ============================================================================
+// Update Polling with ETag
+// ============================================================================
+
+interface UpdateChecker {
+  lastETag: string | null;
+  checkInterval: number;
+  onUpdateAvailable: () => void;
+  stop: () => void;
+}
+
+/**
+ * Create an update checker that polls for new data using ETags
+ * 
+ * @param intervalMs - How often to check (default: 5 minutes)
+ * @param onUpdateAvailable - Callback when new data is available
+ * @returns UpdateChecker with stop() method
+ */
+export function createUpdateChecker(
+  onUpdateAvailable: () => void,
+  intervalMs: number = 5 * 60 * 1000 // 5 minutes default
+): UpdateChecker {
+  let lastETag: string | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+
+  async function checkForUpdates() {
+    if (stopped) return;
+    
+    try {
+      // Try local first, then primary URL
+      const urls = [
+        '/data/index.json',
+        PRIMARY_DATA_URL ? `${PRIMARY_DATA_URL}/index.json` : null,
+      ].filter(Boolean) as string[];
+      
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, {
+            method: 'HEAD',
+            cache: 'no-cache',
+          });
+          
+          if (!response.ok) continue;
+          
+          const etag = response.headers.get('ETag');
+          const lastModified = response.headers.get('Last-Modified');
+          const identifier = etag || lastModified;
+          
+          if (identifier) {
+            if (lastETag === null) {
+              // First check - just store the value
+              lastETag = identifier;
+            } else if (lastETag !== identifier) {
+              // Data has changed!
+              lastETag = identifier;
+              console.info('[UpdateChecker] New data available!');
+              onUpdateAvailable();
+            }
+            break; // Successfully checked, don't try other URLs
+          }
+        } catch {
+          // Try next URL
+        }
+      }
+    } catch (err) {
+      console.warn('[UpdateChecker] Error checking for updates:', err);
+    }
+    
+    // Schedule next check
+    if (!stopped) {
+      timeoutId = setTimeout(checkForUpdates, intervalMs);
+    }
+  }
+
+  // Start checking
+  checkForUpdates();
+
+  return {
+    get lastETag() { return lastETag; },
+    checkInterval: intervalMs,
+    onUpdateAvailable,
+    stop: () => {
+      stopped = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    },
+  };
+}
+

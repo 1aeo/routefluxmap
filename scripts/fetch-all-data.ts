@@ -1,25 +1,60 @@
 #!/usr/bin/env npx tsx
 /**
- * RouteFluxMap - Unified Data Fetcher
+ * RouteFluxMap - Unified Data Fetcher v3.1.0
  * 
- * Fetches all data in a single pass:
- * 1. Relay data from Onionoo API
- * 2. Country client data from Tor Metrics API
- * 3. Geolocation via MaxMind GeoLite2
+ * Single entry point for all Tor network data fetching.
+ * Automatically routes to the appropriate data source:
+ * 
+ * Data Sources:
+ * 1. Onionoo API (onionoo.torproject.org) - Live relay data (current day)
+ * 2. Collector (collector.torproject.org) - Historical relay archives
+ * 3. Tor Metrics (metrics.torproject.org) - Country client estimates (all dates)
+ * 4. MaxMind GeoLite2 - IP geolocation (local database)
  * 
  * Outputs:
  * - relays-YYYY-MM-DD.json (relay locations + individual relay info)
  * - countries-YYYY-MM-DD.json (client counts by country)
- * - index.json (date index with bandwidth stats)
+ * - index.json (lightweight manifest for navigation)
  * 
  * Usage:
- *   npx tsx scripts/fetch-all-data.ts
- *   npx tsx scripts/fetch-all-data.ts --date=2024-01-15
+ *   npx tsx scripts/fetch-all-data.ts              # Current day (Onionoo)
+ *   npx tsx scripts/fetch-all-data.ts 12/07/25     # Specific day (mm/dd/yy)
+ *   npx tsx scripts/fetch-all-data.ts 12/25        # Entire month (mm/yy)
+ *   npx tsx scripts/fetch-all-data.ts 25           # Entire year (yy)
+ *   npx tsx scripts/fetch-all-data.ts --parallel=5 # Control concurrency
+ *   npx tsx scripts/fetch-all-data.ts --geoip=/path/to/GeoLite2-City.mmdb
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
+import { exec, spawn } from 'child_process';
+import * as readline from 'readline';
+import { promisify } from 'util';
+import { fileURLToPath } from 'url';
+
+const execAsync = promisify(exec);
+
+// Get project root directory (works regardless of where script is run from)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+// ============================================================================
+// Version Information
+// ============================================================================
+
+const SCRIPT_VERSION = '3.6.0';
+const DATA_FORMAT_VERSION = '2.1';
+
+// Parallel defaults based on workload type
+const DEFAULT_PARALLEL_DAY = 1;
+const DEFAULT_PARALLEL_MONTH = 8;
+const DEFAULT_PARALLEL_YEAR = 12;  // Reduced from 15 to avoid overwhelming servers
+
+// Retry configuration
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;  // Start with 2s, then exponential backoff
 
 // ============================================================================
 // Types
@@ -60,25 +95,52 @@ interface AggregatedNode {
 }
 
 interface ProcessedRelayData {
+  version: {
+    script: string;
+    dataFormat: string;
+    generatedAt: string;
+    source: 'onionoo' | 'collector';
+  };
+  geoip: {
+    provider: 'maxmind' | 'geoip-lite' | 'country-centroid';
+    version?: string;
+    buildDate?: string;
+  };
   published: string;
   nodes: AggregatedNode[];
   bandwidth: number;
+  relayCount: number;
+  geolocatedCount: number;
   minMax: { min: number; max: number };
 }
 
 interface CountryData {
+  version: {
+    script: string;
+    dataFormat: string;
+    generatedAt: string;
+  };
   date: string;
   totalUsers: number;
   countries: { [code: string]: number };
 }
 
 interface DateIndex {
+  version: {
+    script: string;
+    dataFormat: string;
+  };
   lastUpdated: string;
   dates: string[];
+  // Bandwidth array for sparkline/chart preview (lightweight)
   bandwidths: number[];
-  min: { date: string; bandwidth: number };
-  max: { date: string; bandwidth: number };
-  relayCount: number;
+}
+
+interface DateRange {
+  start: Date;
+  end: Date;
+  mode: 'day' | 'month' | 'year';
+  description: string;
 }
 
 // ============================================================================
@@ -87,11 +149,9 @@ interface DateIndex {
 
 function loadConfig(): Record<string, string> {
   const config: Record<string, string> = {};
-  
-  // Try deploy/config.env first, then project root
   const configPaths = [
-    path.join(process.cwd(), 'deploy', 'config.env'),
-    path.join(process.cwd(), 'config.env'),
+    path.join(PROJECT_ROOT, 'deploy', 'config.env'),
+    path.join(PROJECT_ROOT, 'config.env'),
   ];
   
   for (const configPath of configPaths) {
@@ -112,9 +172,15 @@ function loadConfig(): Record<string, string> {
   return config;
 }
 
-const envConfig = loadConfig();
-const GEOIP_DB_PATH = envConfig.GEOIP_DB_PATH || path.join(process.cwd(), 'data', 'geoip', 'GeoLite2-City.mmdb');
-const OUTPUT_DIR = path.join(process.cwd(), 'public', 'data');
+const fileConfig = loadConfig();
+const CACHE_DIR = path.join(PROJECT_ROOT, 'data', 'cache');
+const OUTPUT_DIR = path.join(PROJECT_ROOT, 'public', 'data');
+
+// Default GeoIP path (can be overridden via config file or --geoip= argument)
+const DEFAULT_GEOIP_PATH = path.join(PROJECT_ROOT, 'data', 'geoip', 'GeoLite2-City.mmdb');
+
+// Runtime config (set in main after parsing args)
+let GEOIP_DB_PATH = fileConfig.GEOIP_DB_PATH || DEFAULT_GEOIP_PATH;
 
 // Country centroids as fallback (lng, lat)
 const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
@@ -137,6 +203,60 @@ const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
   'TR': [35.24, 38.96], 'TW': [120.96, 23.70], 'UA': [31.17, 48.38], 'US': [-95.71, 37.09],
   'VN': [108.28, 14.06], 'ZA': [22.94, -30.56],
 };
+
+// ============================================================================
+// Global State
+// ============================================================================
+
+// GeoIP provider types
+type GeoLiteLookup = {
+  lookup(ip: string): { ll?: [number, number] } | null;
+};
+
+// GeoIP metadata for tracking the source and version
+interface GeoIPMetadata {
+  provider: 'maxmind' | 'geoip-lite' | 'country-centroid';
+  version?: string;
+  buildDate?: string;
+  databasePath?: string;
+}
+
+let geoReader: any = null;
+let geoipLite: GeoLiteLookup | null = null;
+let geoipMetadata: GeoIPMetadata = { provider: 'country-centroid' };
+
+const status = {
+  relayFiles: 0,
+  countryFiles: 0,
+  skipped: 0,
+  failed: 0,
+  totalRelays: 0,
+  totalGeolocated: 0,
+};
+
+// Timing tracker for detailed per-step timing
+interface StepTiming {
+  step: string;
+  durationMs: number;
+}
+
+interface DateTiming {
+  date: string;
+  totalMs: number;
+  steps: StepTiming[];
+}
+
+const timings: DateTiming[] = [];
+
+function formatDuration(ms: number): string {
+  const rounded = Math.round(ms);
+  if (rounded === 0) return `${ms.toFixed(2)}ms`;
+  if (rounded < 1000) return `${rounded}ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(ms / 60000);
+  return `${minutes}m`;
+}
 
 // ============================================================================
 // Utility Functions
@@ -186,14 +306,19 @@ function normalizeFingerprint(fp: string): string {
   if (/^[a-zA-Z0-9+/]{27,28}=*$/.test(clean)) {
     try {
       const hex = Buffer.from(clean, 'base64').toString('hex').toUpperCase();
-      if (/^[0-9A-F]{40}$/.test(hex)) {
-        return hex;
-      }
-    } catch (e) {
-      // Ignore
-    }
+      if (/^[0-9A-F]{40}$/.test(hex)) return hex;
+    } catch {}
   }
   return clean.toUpperCase();
+}
+
+function base64ToHex(base64: string): string {
+  try {
+    const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+    return Buffer.from(padded, 'base64').toString('hex').toUpperCase();
+  } catch {
+    return base64;
+  }
 }
 
 function getCountryCoords(countryCode?: string): { lat: number; lng: number } {
@@ -205,20 +330,206 @@ function getCountryCoords(countryCode?: string): { lat: number; lng: number } {
   };
 }
 
+function geolocateIP(ip: string): { lat: number; lng: number } | null {
+  // Try MaxMind first (more accurate, updated more frequently)
+  if (geoReader) {
+    try {
+      const r = geoReader.get(ip);
+      if (r?.location) {
+        return { lat: r.location.latitude, lng: r.location.longitude };
+      }
+    } catch {}
+  }
+  
+  // Fall back to geoip-lite
+  if (geoipLite) {
+    try {
+      const lookup = geoipLite.lookup(ip);
+      if (lookup?.ll) {
+        const [lat, lng] = lookup.ll;
+        return { lat, lng };
+      }
+    } catch {}
+  }
+  
+  return null;
+}
+
+/**
+ * Initialize GeoIP providers with metadata tracking.
+ * Tries MaxMind first (more accurate), falls back to geoip-lite.
+ */
+async function initializeGeoIP(): Promise<void> {
+  // Try MaxMind first (more accurate, weekly updates available)
+  if (fs.existsSync(GEOIP_DB_PATH)) {
+    try {
+      const maxmind = await import('maxmind');
+      geoReader = await maxmind.open(GEOIP_DB_PATH);
+      
+      // Get database metadata (build date from file mtime as proxy)
+      const stats = fs.statSync(GEOIP_DB_PATH);
+      const buildDate = stats.mtime.toISOString().slice(0, 10);
+      
+      geoipMetadata = {
+        provider: 'maxmind',
+        version: 'GeoLite2-City',
+        buildDate,
+        databasePath: GEOIP_DB_PATH,
+      };
+      
+      console.log(`  ✓ MaxMind database loaded (build: ${buildDate})`);
+      return;
+    } catch (e: any) {
+      console.log(`  ⚠ Failed to load MaxMind database: ${e.message}`);
+    }
+  } else {
+    console.log(`  ⚠ MaxMind DB not found at ${GEOIP_DB_PATH}`);
+  }
+  
+  // Fall back to geoip-lite (less accurate but works out-of-box)
+  try {
+    const geoipModule: any = await import('geoip-lite');
+    const fallback = geoipModule?.default || geoipModule;
+    if (fallback && typeof fallback.lookup === 'function') {
+      geoipLite = fallback as GeoLiteLookup;
+      
+      // geoip-lite version comes from package.json
+      let version = 'unknown';
+      try {
+        // Try to find the geoip-lite package.json in node_modules
+        const possiblePaths = [
+          path.join(PROJECT_ROOT, 'node_modules', 'geoip-lite', 'package.json'),
+          path.join(__dirname, '..', 'node_modules', 'geoip-lite', 'package.json'),
+        ];
+        for (const pkgPath of possiblePaths) {
+          if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+            version = pkg.version || 'unknown';
+            break;
+          }
+        }
+      } catch {}
+      
+      geoipMetadata = {
+        provider: 'geoip-lite',
+        version,
+      };
+      
+      console.log(`  ✓ geoip-lite fallback loaded (v${version})`);
+      return;
+    }
+  } catch (e: any) {
+    console.log(`  ⚠ geoip-lite fallback unavailable: ${e.message}`);
+  }
+  
+  // No GeoIP available - will use country centroids
+  geoipMetadata = { provider: 'country-centroid' };
+  console.log('  ⚠ No GeoIP provider available, using country centroids');
+}
+
 // ============================================================================
-// API Fetchers (run in parallel)
+// Date Parsing
+// ============================================================================
+
+function parseDateRange(input: string): DateRange {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentCentury = Math.floor(currentYear / 100) * 100;
+  
+  input = input.trim();
+  
+  // Legacy --date= format
+  if (input.startsWith('--date=')) {
+    const dateStr = input.slice(7);
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) throw new Error(`Invalid date: ${dateStr}`);
+    return { start: date, end: date, mode: 'day', description: dateStr };
+  }
+  
+  // mm/dd/yy format
+  const dayMatch = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (dayMatch) {
+    const [, month, day, yearShort] = dayMatch;
+    const year = currentCentury + parseInt(yearShort, 10);
+    const date = new Date(year, parseInt(month, 10) - 1, parseInt(day, 10));
+    if (isNaN(date.getTime())) throw new Error(`Invalid date: ${input}`);
+    return { start: date, end: date, mode: 'day', description: date.toISOString().slice(0, 10) };
+  }
+  
+  // mm/yy format
+  const monthMatch = input.match(/^(\d{1,2})\/(\d{2})$/);
+  if (monthMatch) {
+    const [, month, yearShort] = monthMatch;
+    const year = currentCentury + parseInt(yearShort, 10);
+    const monthNum = parseInt(month, 10) - 1;
+    const start = new Date(year, monthNum, 1);
+    const end = new Date(year, monthNum + 1, 0);
+    if (isNaN(start.getTime())) throw new Error(`Invalid month: ${input}`);
+    return {
+      start, end, mode: 'month',
+      description: `${year}-${String(monthNum + 1).padStart(2, '0')} (${start.toISOString().slice(0, 10)} to ${end.toISOString().slice(0, 10)})`,
+    };
+  }
+  
+  // yy format
+  const yearMatch = input.match(/^(\d{2})$/);
+  if (yearMatch) {
+    const year = currentCentury + parseInt(yearMatch[1], 10);
+    const start = new Date(year, 0, 1);
+    const end = new Date(year, 11, 31);
+    return {
+      start, end, mode: 'year',
+      description: `${year} (${start.toISOString().slice(0, 10)} to ${end.toISOString().slice(0, 10)})`,
+    };
+  }
+  
+  // ISO format fallback
+  const date = new Date(input);
+  if (!isNaN(date.getTime())) {
+    return { start: date, end: date, mode: 'day', description: date.toISOString().slice(0, 10) };
+  }
+  
+  throw new Error(`Unrecognized date format: ${input}. Use mm/dd/yy, mm/yy, or yy`);
+}
+
+function generateDatesInRange(range: DateRange): string[] {
+  const dates: string[] = [];
+  const current = new Date(range.start);
+  const today = new Date();
+  today.setHours(23, 59, 59, 999); // End of today
+  
+  // Cap end date at today (can't fetch future data)
+  const effectiveEnd = range.end > today ? today : range.end;
+  
+  while (current <= effectiveEnd) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
+function isRecentDate(dateStr: string): boolean {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffDays = (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24);
+  // Use Onionoo for today and yesterday, Collector for older
+  return diffDays < 2;
+}
+
+// ============================================================================
+// Data Source: Onionoo (Live Data)
 // ============================================================================
 
 function fetchOnionooRelays(): Promise<OnionooResponse> {
   return new Promise((resolve, reject) => {
-    console.log('  📡 Fetching relay data from Onionoo API...');
+    console.log('    📡 Fetching from Onionoo API...');
     const startTime = Date.now();
     
     const options = {
       hostname: 'onionoo.torproject.org',
       path: '/details?type=relay&running=true',
       method: 'GET',
-      headers: { 'User-Agent': 'RouteFluxMap-DataFetcher/2.0' },
+      headers: { 'User-Agent': `RouteFluxMap-DataFetcher/${SCRIPT_VERSION}` },
     };
     
     const req = https.request(options, (res) => {
@@ -227,11 +538,9 @@ function fetchOnionooRelays(): Promise<OnionooResponse> {
       res.on('end', () => {
         try {
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          console.log(`  ✓ Onionoo response received (${elapsed}s)`);
+          console.log(`    ✓ Onionoo response (${elapsed}s)`);
           resolve(JSON.parse(data));
-        } catch (e) {
-          reject(e);
-        }
+        } catch (e) { reject(e); }
       });
     });
     
@@ -240,11 +549,596 @@ function fetchOnionooRelays(): Promise<OnionooResponse> {
   });
 }
 
-function fetchCountryClients(date: string): Promise<CountryData> {
-  return new Promise((resolve, reject) => {
-    console.log('  📡 Fetching country client data from Tor Metrics...');
-    const startTime = Date.now();
+async function processOnionooRelays(data: OnionooResponse): Promise<ProcessedRelayData> {
+  const relays = data.relays || [];
+  let geolocated = 0, fallback = 0;
+  const maxBw = Math.max(...relays.map(r => r.observed_bandwidth || 0), 1);
+  
+  const aggregated: Map<string, { lat: number; lng: number; relays: RelayInfo[] }> = new Map();
+  
+  for (const relay of relays) {
+    const addr = parseAddress(relay.or_addresses);
+    let lat: number, lng: number;
     
+    const geo = geolocateIP(addr.ip);
+    if (geo) {
+      lat = geo.lat; lng = geo.lng; geolocated++;
+    } else {
+      const coords = getCountryCoords(relay.country);
+      lat = coords.lat; lng = coords.lng; fallback++;
+    }
+    
+    const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+    if (!aggregated.has(key)) {
+      aggregated.set(key, { lat, lng, relays: [] });
+    }
+    
+    aggregated.get(key)!.relays.push({
+      nickname: relay.nickname || 'Unnamed',
+      fingerprint: normalizeFingerprint(relay.fingerprint),
+      bandwidth: (relay.observed_bandwidth || 0) / maxBw,
+      flags: mapFlags(relay.flags),
+      ip: addr.ip,
+      port: addr.port,
+    });
+  }
+  
+  status.totalGeolocated += geolocated;
+  status.totalRelays += relays.length;
+  
+  return buildProcessedData(aggregated, data.relays_published, 'onionoo', relays.length, geolocated);
+}
+
+// ============================================================================
+// Lock Manager for Thread-Safe Downloads
+// ============================================================================
+
+// Tracks in-progress downloads and extractions to prevent race conditions
+const downloadLocks: Map<string, Promise<string | null>> = new Map();
+const extractionLocks: Map<string, Promise<string | null>> = new Map();
+
+async function withLock<T>(
+  locks: Map<string, Promise<T>>,
+  key: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  // Check if another operation is already in progress
+  const existing = locks.get(key);
+  if (existing) {
+    return existing;
+  }
+  
+  // Start the operation and store its promise
+  const promise = operation();
+  locks.set(key, promise);
+  
+  try {
+    return await promise;
+  } finally {
+    locks.delete(key);
+  }
+}
+
+// ============================================================================
+// Retry Logic with Exponential Backoff
+// ============================================================================
+
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  operationName: string,
+  maxRetries: number = MAX_RETRIES
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (e: any) {
+      lastError = e;
+      if (attempt < maxRetries) {
+        const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        console.log(`    ⚠ ${operationName} failed (attempt ${attempt}/${maxRetries}): ${e.message}`);
+        console.log(`    ⏳ Retrying in ${delay / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+// ============================================================================
+// Data Source: Collector (Historical Archives)
+// ============================================================================
+
+function downloadFile(url: string, dest: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // Use a temp file to avoid partial downloads being used
+    const tempDest = dest + '.downloading';
+    const file = fs.createWriteStream(tempDest);
+    
+    https.get(url, res => {
+      if (res.statusCode !== 200) {
+        fs.unlink(tempDest, () => {});
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      res.pipe(file);
+      file.on('finish', () => {
+        file.close();
+        // Rename temp file to final destination atomically
+        try {
+          fs.renameSync(tempDest, dest);
+          resolve();
+        } catch (e) {
+          fs.unlink(tempDest, () => {});
+          reject(e);
+        }
+      });
+    }).on('error', e => {
+      fs.unlink(tempDest, () => {});
+      reject(e);
+    });
+  });
+}
+
+async function verifyArchive(archivePath: string): Promise<boolean> {
+  try {
+    await execAsync(`xz -t "${archivePath}"`, { timeout: 120000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureConsensusArchive(year: number, month: number): Promise<string | null> {
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  const cachePath = path.join(CACHE_DIR, `consensuses-${monthStr}.tar.xz`);
+  
+  // Use lock to prevent multiple parallel downloads of the same file
+  return withLock(downloadLocks, `consensus-${monthStr}`, async () => {
+    // Check if already downloaded and valid
+    if (fs.existsSync(cachePath) && fs.statSync(cachePath).size > 1000) {
+      // Verify integrity
+      if (await verifyArchive(cachePath)) {
+        return cachePath;
+      }
+      console.log(`    ⚠ Corrupted consensus archive ${monthStr}, re-downloading...`);
+      fs.unlinkSync(cachePath);
+    }
+    
+    console.log(`    📥 Downloading consensus archive ${monthStr}...`);
+    const url = `https://collector.torproject.org/archive/relay-descriptors/consensuses/consensuses-${monthStr}.tar.xz`;
+    
+    try {
+      await withRetry(async () => {
+        await downloadFile(url, cachePath);
+        // Verify after download
+        if (!await verifyArchive(cachePath)) {
+          fs.unlinkSync(cachePath);
+          throw new Error('Archive verification failed');
+        }
+      }, `Download consensus ${monthStr}`);
+      
+      console.log(`    ✓ Downloaded consensus ${monthStr}`);
+      return cachePath;
+    } catch (e: any) {
+      console.log(`    ✗ Failed to download consensus ${monthStr}: ${e.message}`);
+      return null;
+    }
+  });
+}
+
+async function ensureDescriptorArchive(year: number, month: number): Promise<string | null> {
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  const cachePath = path.join(CACHE_DIR, `server-descriptors-${monthStr}.tar.xz`);
+  
+  // Use lock to prevent multiple parallel downloads of the same file
+  return withLock(downloadLocks, `descriptors-${monthStr}`, async () => {
+    // Check if already downloaded and valid
+    if (fs.existsSync(cachePath) && fs.statSync(cachePath).size > 1000) {
+      // Verify integrity
+      if (await verifyArchive(cachePath)) {
+        return cachePath;
+      }
+      console.log(`    ⚠ Corrupted descriptors archive ${monthStr}, re-downloading...`);
+      fs.unlinkSync(cachePath);
+    }
+    
+    console.log(`    📥 Downloading server descriptors ${monthStr} (~400MB)...`);
+    const url = `https://collector.torproject.org/archive/relay-descriptors/server-descriptors/server-descriptors-${monthStr}.tar.xz`;
+    
+    try {
+      await withRetry(async () => {
+        await downloadFile(url, cachePath);
+        // Verify after download
+        if (!await verifyArchive(cachePath)) {
+          fs.unlinkSync(cachePath);
+          throw new Error('Archive verification failed');
+        }
+      }, `Download descriptors ${monthStr}`);
+      
+      console.log(`    ✓ Downloaded server descriptors ${monthStr}`);
+      return cachePath;
+    } catch (e: any) {
+      console.log(`    ✗ Failed to download descriptors ${monthStr}: ${e.message}`);
+      return null;
+    }
+  });
+}
+
+// Cache for parsed descriptor bandwidth data (fingerprint -> observed_bandwidth)
+const descriptorBandwidthCache: Map<string, Map<string, number>> = new Map();
+
+// Cache for extracted consensus directories (monthStr -> extracted dir path)
+const extractedConsensusCache: Map<string, string> = new Map();
+
+/**
+ * Extract entire consensus archive once per month to a temp directory.
+ * This is much faster than extracting individual days (7.7s once vs 7.7s × N days).
+ * XZ decompression is the bottleneck - it must decompress the entire stream regardless
+ * of which files are extracted, so extracting everything at once is optimal.
+ */
+async function ensureExtractedConsensus(year: number, month: number): Promise<string | null> {
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  
+  // Return cached if already extracted
+  if (extractedConsensusCache.has(monthStr)) {
+    return extractedConsensusCache.get(monthStr)!;
+  }
+  
+  // Use lock to prevent multiple parallel extractions of the same archive
+  return withLock(extractionLocks, `consensus-${monthStr}`, async () => {
+    // Double-check cache after acquiring lock
+    if (extractedConsensusCache.has(monthStr)) {
+      return extractedConsensusCache.get(monthStr)!;
+    }
+    
+    // First ensure the archive exists
+    const archivePath = await ensureConsensusArchive(year, month);
+    if (!archivePath) return null;
+    
+    // Extract to temp directory
+    const extractDir = path.join(CACHE_DIR, `extracted-consensuses-${monthStr}`);
+    const expectedDir = path.join(extractDir, `consensuses-${monthStr}`);
+    
+    // Check if already extracted (from previous run)
+    if (fs.existsSync(expectedDir)) {
+      const files = fs.readdirSync(expectedDir);
+      if (files.length > 0) {
+        console.log(`    ✓ Using cached extracted consensus for ${monthStr}`);
+        extractedConsensusCache.set(monthStr, expectedDir);
+        return expectedDir;
+      }
+    }
+    
+    console.log(`    📦 Extracting full consensus archive ${monthStr} (one-time)...`);
+    const extractStart = Date.now();
+    
+    try {
+      // Clean up any partial extraction
+      if (fs.existsSync(extractDir)) {
+        fs.rmSync(extractDir, { recursive: true });
+      }
+      fs.mkdirSync(extractDir, { recursive: true });
+      
+      // Extract entire archive at once (xz decompression happens once)
+      await withRetry(async () => {
+        await execAsync(
+          `tar -xf "${archivePath}" --xz -C "${extractDir}"`,
+          { maxBuffer: 10 * 1024 * 1024 }
+        );
+        
+        // Verify extraction succeeded
+        if (!fs.existsSync(expectedDir)) {
+          throw new Error('Extraction produced unexpected directory structure');
+        }
+      }, `Extract consensus ${monthStr}`);
+      
+      const elapsed = ((Date.now() - extractStart) / 1000).toFixed(1);
+      console.log(`    ✓ Extracted consensus archive ${monthStr} (${elapsed}s)`);
+      
+      extractedConsensusCache.set(monthStr, expectedDir);
+      return expectedDir;
+    } catch (e: any) {
+      console.log(`    ✗ Failed to extract consensus ${monthStr}: ${e.message}`);
+      // Clean up failed extraction
+      if (fs.existsSync(extractDir)) {
+        fs.rmSync(extractDir, { recursive: true });
+      }
+      return null;
+    }
+  });
+}
+
+async function loadDescriptorBandwidth(year: number, month: number): Promise<Map<string, number>> {
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  
+  // Return cached if available
+  if (descriptorBandwidthCache.has(monthStr)) {
+    return descriptorBandwidthCache.get(monthStr)!;
+  }
+  
+  const archivePath = await ensureDescriptorArchive(year, month);
+  if (!archivePath) {
+    return new Map();
+  }
+  
+  console.log(`    📄 Parsing server descriptors for ${monthStr} (streaming)...`);
+  const parseStart = Date.now();
+  const bandwidthMap = new Map<string, number>();
+  
+  return new Promise((resolve) => {
+    // Use spawn to stream output instead of buffering everything in memory
+    // This avoids maxBuffer limits for large archives (some months are 2GB+ uncompressed)
+    const tar = spawn('tar', ['-xf', archivePath, '--xz', '-O']);
+    
+    tar.on('error', (err) => {
+      console.log(`    ⚠ Failed to spawn tar: ${err.message}`);
+      resolve(new Map());
+    });
+
+    const rl = readline.createInterface({
+      input: tar.stdout,
+      crlfDelay: Infinity
+    });
+
+    let currentFingerprint: string | null = null;
+
+    rl.on('line', (line) => {
+      // Optimization: check start of line before running regex
+      if (line.startsWith('fingerprint ')) {
+        const match = line.match(/^fingerprint\s+([\dA-F\s]+)/i);
+        if (match) {
+          currentFingerprint = match[1].trim().replace(/\s+/g, '').toUpperCase();
+        }
+      } else if (line.startsWith('bandwidth ') && currentFingerprint) {
+        const match = line.match(/^bandwidth\s+\d+\s+\d+\s+(\d+)/);
+        if (match) {
+          const observedBandwidth = parseInt(match[1], 10);
+          // Filter out bogus values: INT_MAX (2^31-1 = 2147483647) indicates overflow
+          // Real relay bandwidth typically maxes around 500 MB/s
+          if (observedBandwidth >= 2147483647) {
+            currentFingerprint = null;
+            return;
+          }
+          // Keep the highest observed bandwidth for each relay
+          const existing = bandwidthMap.get(currentFingerprint) || 0;
+          if (observedBandwidth > existing) {
+            bandwidthMap.set(currentFingerprint, observedBandwidth);
+          }
+          currentFingerprint = null;
+        }
+      } else if (line.startsWith('@type ')) {
+        // Reset on new descriptor boundary
+        currentFingerprint = null;
+      }
+    });
+
+    rl.on('close', () => {
+      const elapsed = ((Date.now() - parseStart) / 1000).toFixed(1);
+      console.log(`    ✓ Parsed ${bandwidthMap.size} relay bandwidths (${elapsed}s)`);
+      descriptorBandwidthCache.set(monthStr, bandwidthMap);
+      resolve(bandwidthMap);
+    });
+    
+    // Consume stderr to prevent blocking
+    tar.stderr.on('data', () => {});
+  });
+}
+
+function parseConsensus(text: string): { nickname: string; fingerprint: string; ip: string; port: string; flags: string; bandwidth: number }[] {
+  const relays: any[] = [];
+  const lines = text.split('\n');
+  let current: any = null;
+  
+  for (const line of lines) {
+    if (line.startsWith('r ')) {
+      if (current) relays.push(current);
+      const p = line.split(' ');
+      if (p.length >= 9) {
+        current = {
+          nickname: p[1],
+          fingerprint: base64ToHex(p[2]),
+          ip: p[6],
+          port: p[7],
+          flags: 'M',
+          bandwidth: 0,
+        };
+      }
+    } else if (line.startsWith('s ') && current) {
+      const f = line.substring(2).split(' ');
+      current.flags = 
+        (f.includes('Running') ? 'M' : '') +
+        (f.includes('Guard') ? 'G' : '') +
+        (f.includes('Exit') ? 'E' : '') +
+        (f.includes('HSDir') ? 'H' : '') || 'M';
+    } else if (line.startsWith('w ') && current) {
+      const m = line.match(/Bandwidth=(\d+)/);
+      if (m) current.bandwidth = parseInt(m[1]);
+    }
+  }
+  if (current) relays.push(current);
+  return relays;
+}
+
+/**
+ * Find consensus file in a specific directory matching the target prefix.
+ */
+function findConsensusFileInDir(dirPath: string, targetPrefix: string): string | null {
+  if (!fs.existsSync(dirPath)) return null;
+  const files = fs.readdirSync(dirPath)
+    .filter(file => file.startsWith(targetPrefix))
+    .sort();
+  if (files.length === 0) return null;
+  return path.join(dirPath, files[0]);
+}
+
+/**
+ * Recursively search for consensus file matching the target prefix.
+ */
+function searchConsensusRecursively(dirPath: string, targetPrefix: string, depth: number = 0): string | null {
+  if (!fs.existsSync(dirPath)) return null;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        const nested = searchConsensusRecursively(fullPath, targetPrefix, depth + 1);
+        if (nested) return nested;
+      } else if (entry.isFile() && entry.name.startsWith(targetPrefix)) {
+        return fullPath;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Robust consensus file resolution with multiple fallback strategies.
+ */
+function resolveConsensusFile(extractedDir: string, dateStr: string): string | null {
+  const [, , dayRaw] = dateStr.split('-');
+  const dayStr = dayRaw?.padStart(2, '0') || '01';
+  const targetPrefix = `${dateStr}-`;
+  const triedDirs = new Set<string>();
+  
+  const addCandidate = (offset: number) => {
+    const numericDay = parseInt(dayStr, 10) + offset;
+    if (numericDay >= 1 && numericDay <= 31) {
+      triedDirs.add(String(numericDay).padStart(2, '0'));
+    }
+  };
+  
+  // Try exact day first, then adjacent days
+  addCandidate(0);
+  for (const offset of [1, -1, 2, -2]) {
+    addCandidate(offset);
+  }
+  
+  // Search candidate directories
+  for (const dir of triedDirs) {
+    const match = findConsensusFileInDir(path.join(extractedDir, dir), targetPrefix);
+    if (match) return match;
+  }
+  
+  // Scan all subdirectories
+  try {
+    const entries = fs.readdirSync(extractedDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const match = findConsensusFileInDir(path.join(extractedDir, entry.name), targetPrefix);
+      if (match) return match;
+    }
+  } catch {}
+  
+  // Last resort: recursive search
+  const recursiveMatch = searchConsensusRecursively(extractedDir, targetPrefix);
+  if (recursiveMatch) return recursiveMatch;
+  
+  return null;
+}
+
+async function fetchCollectorRelays(dateStr: string): Promise<ProcessedRelayData | null> {
+  return fetchCollectorRelaysWithTiming(dateStr, []);
+}
+
+async function fetchCollectorRelaysWithTiming(dateStr: string, steps: StepTiming[]): Promise<ProcessedRelayData | null> {
+  const [year, month] = dateStr.split('-').map(Number);
+  
+  // Ensure consensus is extracted (one-time per month, much faster than per-day extraction)
+  const archiveStart = Date.now();
+  const extractedDir = await ensureExtractedConsensus(year, month);
+  steps.push({ step: 'consensus-extract-all', durationMs: Date.now() - archiveStart });
+  
+  if (!extractedDir) return null;
+  
+  // Load real bandwidth from server descriptors
+  const descStart = Date.now();
+  const bandwidthMap = await loadDescriptorBandwidth(year, month);
+  steps.push({ step: 'descriptor-load', durationMs: Date.now() - descStart });
+  
+  try {
+    // Find consensus file for this day using robust resolution
+    const findStart = Date.now();
+    const consensusFile = resolveConsensusFile(extractedDir, dateStr);
+    steps.push({ step: 'consensus-find', durationMs: Date.now() - findStart });
+    
+    if (!consensusFile) {
+      console.log(`    ✗ No consensus for ${dateStr}`);
+      return null;
+    }
+    
+    // Read consensus from extracted file (very fast - just file I/O, no decompression)
+    const readStart = Date.now();
+    const consensusText = fs.readFileSync(consensusFile, 'utf-8');
+    steps.push({ step: 'consensus-read', durationMs: Date.now() - readStart });
+    
+    // Parse consensus (gets relay list with fingerprints)
+    const parseStart = Date.now();
+    const relays = parseConsensus(consensusText);
+    steps.push({ step: 'consensus-parse', durationMs: Date.now() - parseStart });
+    
+    if (relays.length === 0) return null;
+    
+    // Join with real bandwidth from descriptors and geolocate
+    const geoStart = Date.now();
+    
+    // Get real bandwidth for each relay from descriptors
+    let matchedBandwidth = 0;
+    for (const relay of relays) {
+      const realBw = bandwidthMap.get(relay.fingerprint);
+      if (realBw !== undefined) {
+        relay.bandwidth = realBw;
+        matchedBandwidth++;
+      }
+      // If no match, keep consensus weight as fallback
+    }
+    
+    const maxBw = Math.max(...relays.map(r => r.bandwidth || 0), 1);
+    const aggregated: Map<string, { lat: number; lng: number; relays: RelayInfo[] }> = new Map();
+    let geolocated = 0;
+    
+    for (const relay of relays) {
+      const geo = geolocateIP(relay.ip);
+      const lat = geo?.lat ?? getCountryCoords().lat;
+      const lng = geo?.lng ?? getCountryCoords().lng;
+      if (geo) geolocated++;
+      
+      const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+      if (!aggregated.has(key)) {
+        aggregated.set(key, { lat, lng, relays: [] });
+      }
+      
+      aggregated.get(key)!.relays.push({
+        nickname: (relay.nickname || '').replace(/,/g, ''),
+        fingerprint: relay.fingerprint,
+        bandwidth: (relay.bandwidth || 0) / maxBw,
+        flags: relay.flags || 'M',
+        ip: relay.ip,
+        port: relay.port,
+      });
+    }
+    steps.push({ step: 'geolocate', durationMs: Date.now() - geoStart });
+    
+    console.log(`    ✓ Matched ${matchedBandwidth}/${relays.length} relays with real bandwidth`);
+    
+    status.totalGeolocated += geolocated;
+    status.totalRelays += relays.length;
+    
+    return buildProcessedData(aggregated, dateStr, 'collector', relays.length, geolocated);
+  } catch (e: any) {
+    console.log(`    ✗ Error processing ${dateStr}: ${e.message}`);
+    return null;
+  }
+}
+
+// ============================================================================
+// Data Source: Tor Metrics (Country Data)
+// ============================================================================
+
+function fetchCountryClientsOnce(date: string): Promise<CountryData> {
+  return new Promise((resolve, reject) => {
     const url = `https://metrics.torproject.org/userstats-relay-country.csv?start=${date}&end=${date}`;
     
     https.get(url, (res) => {
@@ -262,122 +1156,69 @@ function fetchCountryClients(date: string): Promise<CountryData> {
         
         const countries: { [code: string]: number } = {};
         let totalUsers = 0;
+        let hasAggregateRow = false;
+        let countrySum = 0;
         
         for (const line of lines) {
           const parts = line.split(',');
           if (parts.length < 3) continue;
           
-          const [, country, usersStr] = parts;
+          const [, countryRaw = '', usersStr] = parts;
           const users = parseInt(usersStr, 10);
+          if (isNaN(users)) continue;
           
-          if (!country || isNaN(users)) continue;
+          const country = countryRaw.trim();
           
+          // Empty country field is the aggregate total
           if (country === '') {
             totalUsers = users;
+            hasAggregateRow = true;
             continue;
           }
           
-          if (country !== '??') {
-            countries[country.toUpperCase()] = users;
-          }
+          // Skip unknown countries
+          const normalized = country.toUpperCase();
+          if (normalized === '??' || normalized === '') continue;
+          
+          countries[normalized] = users;
+          countrySum += users;
         }
         
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`  ✓ Country data received (${elapsed}s, ${Object.keys(countries).length} countries)`);
+        // If no aggregate row, sum the countries
+        if (!hasAggregateRow) {
+          totalUsers = countrySum;
+        }
         
-        resolve({ date, totalUsers, countries });
+        resolve({
+          version: {
+            script: SCRIPT_VERSION,
+            dataFormat: DATA_FORMAT_VERSION,
+            generatedAt: new Date().toISOString(),
+          },
+          date,
+          totalUsers,
+          countries,
+        });
       });
     }).on('error', reject);
   });
 }
 
+async function fetchCountryClients(date: string): Promise<CountryData> {
+  return withRetry(() => fetchCountryClientsOnce(date), `Country data ${date}`, 2);
+}
+
 // ============================================================================
-// Processing
+// Data Processing
 // ============================================================================
 
-async function processRelays(data: OnionooResponse): Promise<ProcessedRelayData> {
-  const relays = data.relays || [];
-  console.log(`  🔄 Processing ${relays.length} relays...`);
-  
-  // Try to load MaxMind database
-  let geoReader: any = null;
-  try {
-    if (fs.existsSync(GEOIP_DB_PATH)) {
-      const maxmind = await import('maxmind');
-      geoReader = await maxmind.open(GEOIP_DB_PATH);
-      console.log('  ✓ MaxMind database loaded');
-    } else {
-      console.log(`  ⚠ MaxMind database not found at ${GEOIP_DB_PATH}`);
-      console.log('    Using country centroids as fallback');
-    }
-  } catch (e) {
-    console.log('  ⚠ MaxMind not available, using country centroids');
-  }
-  
-  const maxBw = Math.max(...relays.map(r => r.observed_bandwidth || 0), 1);
-  
-  // Aggregate relays by location
-  const aggregated: Map<string, {
-    lat: number;
-    lng: number;
-    relays: RelayInfo[];
-  }> = new Map();
-  
-  let geolocated = 0;
-  let fallback = 0;
-  
-  for (const relay of relays) {
-    const addr = parseAddress(relay.or_addresses);
-    let lat: number, lng: number;
-    
-    if (geoReader) {
-      try {
-        const result = geoReader.get(addr.ip);
-        if (result?.location) {
-          lat = result.location.latitude;
-          lng = result.location.longitude;
-          geolocated++;
-        } else {
-          const coords = getCountryCoords(relay.country);
-          lat = coords.lat;
-          lng = coords.lng;
-          fallback++;
-        }
-      } catch {
-        const coords = getCountryCoords(relay.country);
-        lat = coords.lat;
-        lng = coords.lng;
-        fallback++;
-      }
-    } else {
-      const coords = getCountryCoords(relay.country);
-      lat = coords.lat;
-      lng = coords.lng;
-      fallback++;
-    }
-    
-    // Round to 2 decimal places for aggregation
-    const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
-    
-    if (!aggregated.has(key)) {
-      aggregated.set(key, { lat, lng, relays: [] });
-    }
-    
-    aggregated.get(key)!.relays.push({
-      nickname: relay.nickname || 'Unnamed',
-      fingerprint: normalizeFingerprint(relay.fingerprint),
-      bandwidth: (relay.observed_bandwidth || 0) / maxBw,
-      flags: mapFlags(relay.flags),
-      ip: addr.ip,
-      port: addr.port,
-    });
-  }
-  
-  console.log(`    ✓ MaxMind lookup: ${geolocated} IPs`);
-  console.log(`    ○ Country fallback: ${fallback} IPs`);
-  console.log(`    → Aggregated into ${aggregated.size} locations`);
-  
-  // Calculate total bandwidth for normalization
+function buildProcessedData(
+  aggregated: Map<string, { lat: number; lng: number; relays: RelayInfo[] }>,
+  published: string,
+  source: 'onionoo' | 'collector',
+  relayCount: number,
+  geolocatedCount: number
+): ProcessedRelayData {
   let totalBandwidth = 0;
   for (const bucket of aggregated.values()) {
     for (const relay of bucket.relays) {
@@ -385,7 +1226,6 @@ async function processRelays(data: OnionooResponse): Promise<ProcessedRelayData>
     }
   }
   
-  // Convert to node array
   const nodes: AggregatedNode[] = [];
   let minBw = Infinity, maxBwNode = 0;
   
@@ -417,9 +1257,22 @@ async function processRelays(data: OnionooResponse): Promise<ProcessedRelayData>
   nodes.sort((a, b) => b.bandwidth - a.bandwidth);
   
   return {
-    published: data.relays_published,
+    version: {
+      script: SCRIPT_VERSION,
+      dataFormat: DATA_FORMAT_VERSION,
+      generatedAt: new Date().toISOString(),
+      source,
+    },
+    geoip: {
+      provider: geoipMetadata.provider,
+      version: geoipMetadata.version,
+      buildDate: geoipMetadata.buildDate,
+    },
+    published,
     nodes,
     bandwidth: totalBandwidth,
+    relayCount,
+    geolocatedCount,
     minMax: { min: minBw === Infinity ? 0 : minBw, max: maxBwNode },
   };
 }
@@ -428,46 +1281,149 @@ async function processRelays(data: OnionooResponse): Promise<ProcessedRelayData>
 // Index Management
 // ============================================================================
 
-function updateIndex(dateStr: string, totalBandwidth: number, relayCount: number): void {
+function updateIndex(): void {
   const indexPath = path.join(OUTPUT_DIR, 'index.json');
-  let index: DateIndex;
+  const jsonFiles = fs.readdirSync(OUTPUT_DIR)
+    .filter(f => f.startsWith('relays-') && f.endsWith('.json'))
+    .sort();
   
-  if (fs.existsSync(indexPath)) {
-    index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-  } else {
-    index = {
-      lastUpdated: new Date().toISOString(),
-      dates: [],
-      bandwidths: [],
-      min: { date: '', bandwidth: Infinity },
-      max: { date: '', bandwidth: 0 },
-      relayCount: 0,
-    };
+  const dates: string[] = [];
+  const bandwidths: number[] = [];
+  
+  for (const file of jsonFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(OUTPUT_DIR, file), 'utf-8'));
+      const dateStr = file.replace('relays-', '').replace('.json', '');
+      dates.push(dateStr);
+      bandwidths.push(data.bandwidth || 0);
+    } catch {}
   }
   
-  const dateIndex = index.dates.indexOf(dateStr);
-  if (dateIndex === -1) {
-    index.dates.push(dateStr);
-    index.bandwidths.push(totalBandwidth);
-  } else {
-    index.bandwidths[dateIndex] = totalBandwidth;
-  }
-  
-  // Sort by date
-  const sorted = index.dates.map((d, i) => ({ date: d, bw: index.bandwidths[i] }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-  index.dates = sorted.map(s => s.date);
-  index.bandwidths = sorted.map(s => s.bw);
-  
-  // Update min/max
-  const minBw = Math.min(...index.bandwidths);
-  const maxBw = Math.max(...index.bandwidths);
-  index.min = { date: index.dates[index.bandwidths.indexOf(minBw)], bandwidth: minBw };
-  index.max = { date: index.dates[index.bandwidths.indexOf(maxBw)], bandwidth: maxBw };
-  index.lastUpdated = new Date().toISOString();
-  index.relayCount = relayCount;
+  const index: DateIndex = {
+    version: {
+      script: SCRIPT_VERSION,
+      dataFormat: DATA_FORMAT_VERSION,
+    },
+    lastUpdated: new Date().toISOString(),
+    dates,
+    bandwidths,
+  };
   
   fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+}
+
+// ============================================================================
+// Parallel Processing
+// ============================================================================
+
+async function runParallel<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
+  const results: Promise<T>[] = [];
+  const executing: Set<Promise<T>> = new Set();
+  
+  for (const task of tasks) {
+    const p = task().then(r => { executing.delete(p); return r; });
+    results.push(p);
+    executing.add(p);
+    if (executing.size >= concurrency) await Promise.race(executing);
+  }
+  
+  return Promise.all(results);
+}
+
+// ============================================================================
+// Cleanup Extracted Files
+// ============================================================================
+
+function cleanupExtractedFiles(): void {
+  for (const [monthStr, extractedDir] of extractedConsensusCache.entries()) {
+    const parentDir = path.dirname(extractedDir);
+    if (fs.existsSync(parentDir)) {
+      try {
+        fs.rmSync(parentDir, { recursive: true });
+        console.log(`  ✓ Cleaned up extracted consensus ${monthStr}`);
+      } catch (e: any) {
+        console.log(`  ⚠ Failed to cleanup ${monthStr}: ${e.message}`);
+      }
+    }
+  }
+  extractedConsensusCache.clear();
+}
+
+// ============================================================================
+// Main Processing Per Date
+// ============================================================================
+
+async function processDate(dateStr: string): Promise<void> {
+  const relayPath = path.join(OUTPUT_DIR, `relays-${dateStr}.json`);
+  const countryPath = path.join(OUTPUT_DIR, `countries-${dateStr}.json`);
+  const dateStartTime = Date.now();
+  const steps: StepTiming[] = [];
+  
+  // Skip if already exists
+  if (fs.existsSync(relayPath) && fs.existsSync(countryPath)) {
+    console.log(`  ○ ${dateStr} - already exists, skipping`);
+    status.skipped++;
+    return;
+  }
+  
+  console.log(`\n  ▶ Processing ${dateStr}...`);
+  
+  // Fetch relay data from appropriate source
+  let relayData: ProcessedRelayData | null = null;
+  
+  if (isRecentDate(dateStr)) {
+    // Use Onionoo for recent dates
+    const stepStart = Date.now();
+    try {
+      const onionooData = await fetchOnionooRelays();
+      steps.push({ step: 'onionoo-fetch', durationMs: Date.now() - stepStart });
+      
+      const processStart = Date.now();
+      relayData = await processOnionooRelays(onionooData);
+      steps.push({ step: 'onionoo-process', durationMs: Date.now() - processStart });
+    } catch (e: any) {
+      steps.push({ step: 'onionoo-fetch-failed', durationMs: Date.now() - stepStart });
+      console.log(`    ✗ Onionoo failed: ${e.message}, trying Collector...`);
+      relayData = await fetchCollectorRelaysWithTiming(dateStr, steps);
+    }
+  } else {
+    // Use Collector for historical dates
+    relayData = await fetchCollectorRelaysWithTiming(dateStr, steps);
+  }
+  
+  if (relayData) {
+    const writeStart = Date.now();
+    fs.writeFileSync(relayPath, JSON.stringify(relayData, null, 2));
+    steps.push({ step: 'relay-write', durationMs: Date.now() - writeStart });
+    console.log(`    ✓ Relay data saved (${relayData.nodes.length} locations, ${relayData.relayCount} relays, ${relayData.geolocatedCount} geolocated)`);
+    status.relayFiles++;
+  } else {
+    console.log(`    ✗ No relay data for ${dateStr}`);
+    status.failed++;
+  }
+  
+  // Fetch country data from Tor Metrics (always available for historical dates)
+  const countryStart = Date.now();
+  try {
+    const countryData = await fetchCountryClients(dateStr);
+    steps.push({ step: 'country-fetch', durationMs: Date.now() - countryStart });
+    
+    const writeStart = Date.now();
+    fs.writeFileSync(countryPath, JSON.stringify(countryData, null, 2));
+    steps.push({ step: 'country-write', durationMs: Date.now() - writeStart });
+    console.log(`    ✓ Country data saved (${Object.keys(countryData.countries).length} countries, ${countryData.totalUsers.toLocaleString()} users)`);
+    status.countryFiles++;
+  } catch (e: any) {
+    steps.push({ step: 'country-fetch-failed', durationMs: Date.now() - countryStart });
+    console.log(`    ⚠ Country data not available: ${e.message}`);
+  }
+  
+  const totalMs = Date.now() - dateStartTime;
+  timings.push({ date: dateStr, totalMs, steps });
+  
+  // Print timing summary for this date
+  const stepSummary = steps.map(s => `${s.step}:${formatDuration(s.durationMs)}`).join(' ');
+  console.log(`    ⏱ Total: ${formatDuration(totalMs)} [${stepSummary}]`);
 }
 
 // ============================================================================
@@ -475,88 +1431,164 @@ function updateIndex(dateStr: string, totalBandwidth: number, relayCount: number
 // ============================================================================
 
 async function main() {
-  console.log('\n╔════════════════════════════════════════════════════════════╗');
-  console.log('║   RouteFluxMap Unified Data Fetcher                        ║');
-  console.log('╚════════════════════════════════════════════════════════════╝\n');
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log(`║   RouteFluxMap Unified Data Fetcher v${SCRIPT_VERSION}                     ║`);
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
   
   // Parse arguments
   const args = process.argv.slice(2);
-  let targetDate = new Date().toISOString().slice(0, 10);
+  let dateRange: DateRange;
+  let parallelOverride: number | null = null;
   
+  // Extract options
   for (const arg of args) {
-    if (arg.startsWith('--date=')) {
-      targetDate = arg.slice(7);
+    if (arg.startsWith('--parallel=')) {
+      parallelOverride = parseInt(arg.slice(11)) || null;
+    } else if (arg.startsWith('--geoip=')) {
+      GEOIP_DB_PATH = arg.slice(8);
     }
   }
   
-  console.log(`  Date: ${targetDate}`);
-  console.log(`  Output: ${OUTPUT_DIR}\n`);
-  
-  // Ensure output directory exists
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  // Parse date range
+  const dateArg = args.find(a => !a.startsWith('--') || a.startsWith('--date='));
+  if (dateArg) {
+    dateRange = parseDateRange(dateArg);
+  } else {
+    const today = new Date();
+    dateRange = {
+      start: today,
+      end: today,
+      mode: 'day',
+      description: today.toISOString().slice(0, 10) + ' (current day)',
+    };
   }
   
-  // Fetch data in parallel
-  console.log('━━━ Phase 1: Fetch Data (Parallel) ━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  // Set parallel based on mode (can be overridden)
+  let parallel: number;
+  if (parallelOverride !== null) {
+    parallel = parallelOverride;
+  } else {
+    switch (dateRange.mode) {
+      case 'year':
+        parallel = DEFAULT_PARALLEL_YEAR;
+        break;
+      case 'month':
+        parallel = DEFAULT_PARALLEL_MONTH;
+        break;
+      default:
+        parallel = DEFAULT_PARALLEL_DAY;
+    }
+  }
+  
+  const targetDates = generateDatesInRange(dateRange);
+  
+  console.log('  Configuration:');
+  console.log(`    Script version:  ${SCRIPT_VERSION}`);
+  console.log(`    Data format:     ${DATA_FORMAT_VERSION}`);
+  console.log(`    Date range:      ${dateRange.description}`);
+  console.log(`    Dates to fetch:  ${targetDates.length}`);
+  console.log(`    Parallel:        ${parallel}`);
+  console.log(`    GeoIP database:  ${GEOIP_DB_PATH}`);
+  console.log(`    Cache:           ${CACHE_DIR}`);
+  console.log(`    Output:          ${OUTPUT_DIR}`);
+  
+  // Data sources info
+  console.log('\n  Data Sources:');
+  console.log('    • Onionoo API      → Live relay data (last 2 days)');
+  console.log('    • Collector        → Historical relay archives');
+  console.log('    • Tor Metrics      → Country client estimates');
+  console.log('    • MaxMind GeoLite2 → IP geolocation (primary)');
+  console.log('    • geoip-lite       → IP geolocation (fallback)');
+  
+  // Ensure directories exist
+  [CACHE_DIR, OUTPUT_DIR].forEach(d => {
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  });
+  
+  // Initialize GeoIP providers (MaxMind → geoip-lite → country centroids)
+  console.log('\n━━━ Initialization ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  await initializeGeoIP();
   
   const startTime = Date.now();
   
-  const [onionooData, countryData] = await Promise.all([
-    fetchOnionooRelays(),
-    fetchCountryClients(targetDate).catch(err => {
-      console.log(`  ⚠ Country data fetch failed: ${err.message}`);
-      return null;
-    }),
-  ]);
+  // Process dates
+  console.log('\n━━━ Fetching Data ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   
-  // Process relay data
-  console.log('\n━━━ Phase 2: Process & Geolocate ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-  
-  const processedRelays = await processRelays(onionooData);
-  
-  // Extract date from published timestamp
-  const dateMatch = processedRelays.published.match(/(\d{4})-(\d{2})-(\d{2})/);
-  const dateStr = dateMatch
-    ? `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`
-    : targetDate;
-  
-  // Write outputs
-  console.log('\n━━━ Phase 3: Write Outputs ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-  
-  // Relay data
-  const relayPath = path.join(OUTPUT_DIR, `relays-${dateStr}.json`);
-  fs.writeFileSync(relayPath, JSON.stringify(processedRelays, null, 2));
-  console.log(`  ✓ Relay data: ${relayPath}`);
-  
-  // Country data
-  if (countryData) {
-    const countryPath = path.join(OUTPUT_DIR, `countries-${dateStr}.json`);
-    fs.writeFileSync(countryPath, JSON.stringify(countryData, null, 2));
-    console.log(`  ✓ Country data: ${countryPath}`);
+  if (targetDates.length === 1) {
+    // Single date - process directly
+    await processDate(targetDates[0]);
+  } else {
+    // Multiple dates - process in parallel
+    await runParallel(
+      targetDates.map(date => () => processDate(date)),
+      parallel
+    );
   }
   
+  // Cleanup extracted files (optional - saves disk space)
+  console.log('\n━━━ Cleanup ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  cleanupExtractedFiles();
+  
   // Update index
-  const totalRelays = processedRelays.nodes.reduce((sum, n) => sum + n.relays.length, 0);
-  updateIndex(dateStr, processedRelays.bandwidth, totalRelays);
-  console.log(`  ✓ Index updated`);
+  console.log('\n━━━ Updating Index ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  updateIndex();
+  console.log('  ✓ Index updated');
   
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   
-  console.log('\n════════════════════════════════════════════════════════════════');
-  console.log(`  📍 Locations: ${processedRelays.nodes.length}`);
-  console.log(`  🔄 Total relays: ${totalRelays}`);
-  if (countryData) {
-    console.log(`  🌍 Countries: ${Object.keys(countryData.countries).length}`);
-    console.log(`  👥 Est. users: ${countryData.totalUsers.toLocaleString()}`);
+  // Calculate timing statistics
+  const processedTimings = timings.filter(t => t.steps.length > 0);
+  let avgMs = 0, minMs = Infinity, maxMs = 0;
+  const stepTotals: Record<string, { count: number; totalMs: number }> = {};
+  
+  for (const t of processedTimings) {
+    avgMs += t.totalMs;
+    minMs = Math.min(minMs, t.totalMs);
+    maxMs = Math.max(maxMs, t.totalMs);
+    
+    for (const step of t.steps) {
+      if (!stepTotals[step.step]) stepTotals[step.step] = { count: 0, totalMs: 0 };
+      stepTotals[step.step].count++;
+      stepTotals[step.step].totalMs += step.durationMs;
+    }
   }
-  console.log(`  📅 Published: ${processedRelays.published}`);
-  console.log(`  ⏱  Time: ${elapsed}s`);
-  console.log('════════════════════════════════════════════════════════════════\n');
+  
+  if (processedTimings.length > 0) avgMs /= processedTimings.length;
+  
+  console.log('\n════════════════════════════════════════════════════════════════════');
+  console.log('  Summary:');
+  console.log(`    📅 Relay files:     ${status.relayFiles} created`);
+  console.log(`    🌍 Country files:   ${status.countryFiles} created`);
+  console.log(`    ○  Skipped:         ${status.skipped} (already exist)`);
+  console.log(`    ✗  Failed:          ${status.failed}`);
+  console.log(`    🔄 Total relays:    ${status.totalRelays.toLocaleString()}`);
+  console.log(`    📍 Geolocated:      ${status.totalGeolocated.toLocaleString()}`);
+  console.log(`    🔢 Version:         script=${SCRIPT_VERSION}, format=${DATA_FORMAT_VERSION}`);
+  console.log(`    ⏱  Total time:      ${elapsed}s`);
+  
+  if (processedTimings.length > 0) {
+    console.log('\n  Per-date timing (processed):');
+    console.log(`    📊 Average:  ${formatDuration(avgMs)}`);
+    console.log(`    ⬇️  Min:      ${formatDuration(minMs)}`);
+    console.log(`    ⬆️  Max:      ${formatDuration(maxMs)}`);
+    
+    console.log('\n  Per-step timing (averages):');
+    const stepOrder = ['consensus-extract-all', 'descriptor-load', 'consensus-find', 'consensus-read', 
+                       'consensus-parse', 'geolocate', 'relay-write', 'country-fetch', 'country-write',
+                       'onionoo-fetch', 'onionoo-process'];
+    for (const stepName of stepOrder) {
+      const s = stepTotals[stepName];
+      if (s && s.count > 0) {
+        const avg = Math.round(s.totalMs / s.count);
+        console.log(`    ${stepName.padEnd(18)} ${formatDuration(avg).padStart(8)} avg (${s.count}x)`);
+      }
+    }
+  }
+  
+  console.log('════════════════════════════════════════════════════════════════════\n');
 }
 
 main().catch(err => {
   console.error('❌ Error:', err.message);
   process.exit(1);
 });
-
