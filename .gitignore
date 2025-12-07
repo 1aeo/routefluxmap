@@ -7,9 +7,13 @@ dist/
 
 # Environment files (keep credentials out of git)
 config.env
+deploy/config.env
 .env
 .env.local
 .env.*.local
+
+# Deploy logs
+deploy/logs/
 
 # Data files (fetched/generated, not source-controlled)
 public/data/

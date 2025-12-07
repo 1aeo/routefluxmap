@@ -24,7 +24,7 @@ A modern, real-time visualization of the Tor network showing relay bandwidth and
 | Styling | [Tailwind CSS](https://tailwindcss.com) |
 | Hosting | [Cloudflare Pages](https://pages.cloudflare.com) |
 | Data Storage | [Cloudflare R2](https://www.cloudflare.com/r2) |
-| Data Pipeline | [GitHub Actions](https://github.com/features/actions) |
+| Data Pipeline | Local Cron Job |
 
 ## 📦 Quick Start
 
@@ -70,22 +70,9 @@ Create a `.env` file for local development:
 PUBLIC_DATA_URL=https://data.routefluxmap.1aeo.com
 ```
 
-For the data pipeline (GitHub Actions secrets):
-
-```env
-# MaxMind GeoIP
-MAXMIND_LICENSE_KEY=your_license_key
-
-# Cloudflare R2
-R2_ENDPOINT=https://xxx.r2.cloudflarestorage.com
-R2_ACCESS_KEY_ID=your_access_key
-R2_SECRET_ACCESS_KEY=your_secret_key
-R2_BUCKET_NAME=routefluxmap-data
-```
-
 ## 📊 Data Pipeline
 
-The data is fetched hourly from the [Tor Onionoo API](https://onionoo.torproject.org/) and processed via GitHub Actions:
+The data is fetched hourly from the [Tor Onionoo API](https://onionoo.torproject.org/) via a local cron job:
 
 1. **Fetch**: Download relay data from Onionoo
 2. **Geolocate**: Look up IP coordinates using MaxMind GeoLite2
@@ -95,12 +82,19 @@ The data is fetched hourly from the [Tor Onionoo API](https://onionoo.torproject
 ### Manual Data Fetch
 
 ```bash
-# Fetch and process data locally
-pnpm run fetch-data
+# Fetch relay data + country data + geolocate (all in one)
+npm run fetch-data
 
-# Upload to R2 (requires credentials)
-pnpm run upload-data
+# Upload to R2 and/or DO Spaces
+./deploy/scripts/update.sh
 ```
+
+### Deployment Setup
+
+See [docs/setup/](docs/setup/) for detailed guides:
+- [MaxMind GeoIP](docs/setup/maxmind.md)
+- [Cloudflare Pages](docs/setup/cloudflare-pages.md)
+- [Cron Setup](docs/setup/cron.md)
 
 ## 🏗 Project Structure
 
@@ -116,8 +110,14 @@ routefluxmap/
 │   ├── pages/           # Routes
 │   └── styles/          # Global CSS
 ├── public/              # Static assets
-├── scripts/             # Data pipeline scripts
-└── .github/workflows/   # GitHub Actions
+├── scripts/             # Data fetch scripts
+├── deploy/              # Deployment scripts (R2/Spaces upload)
+│   ├── scripts/         # Upload scripts (allium-deploy style)
+│   └── config.env       # Credentials (gitignored)
+├── docs/                # Documentation
+│   ├── setup/           # Setup guides (MaxMind, Cloudflare, Cron)
+│   └── features/        # Feature specs
+└── tests/               # Unit tests
 ```
 
 ## 🗺 Architecture
@@ -138,7 +138,7 @@ routefluxmap/
                          ▲ hourly upload
                          │
 ┌─────────────────────────────────────────────────────────┐
-│  GitHub Actions (Data Pipeline)                         │
+│  Local Cron Job (Data Pipeline)                         │
 │  └── Fetch Onionoo → GeoIP → Aggregate → Upload        │
 └─────────────────────────────────────────────────────────┘
 ```

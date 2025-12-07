@@ -9,10 +9,12 @@
     "build": "astro check && astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "fetch-data": "tsx scripts/fetch-tor-data.ts",
+    "fetch-data": "tsx scripts/fetch-all-data.ts",
     "fetch-historical": "tsx scripts/fetch-historical-data.ts",
     "convert-csv": "tsx scripts/convert-csv-to-json.ts",
-    "upload": "tsx scripts/upload-to-storage.ts"
+    "upload": "tsx scripts/upload-to-storage.ts",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage"
   },
   "keywords": ["tor", "visualization", "astro", "deckgl", "maplibre"],
   "author": "RouteFluxMap Contributors",
@@ -34,9 +36,14 @@
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.600.0",
+    "@testing-library/react": "^14.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "csv-parse": "^5.5.0",
+    "jsdom": "^24.0.0",
     "maxmind": "^4.3.0",
-    "tsx": "^4.19.0"
+    "tsx": "^4.19.0",
+    "vitest": "^1.6.0"
   }
 }

@@ -190,6 +190,12 @@ export function useParticleLayer({
       const visiblePaths = pathsRef.current.filter(p => p.count >= minCountThreshold);
 
       if (visiblePaths.length > 0) {
+        // Determine line color based on traffic type
+        // Green for general/all, Orange for hidden only
+        const lineColor: [number, number, number] = trafficType === 'hidden' 
+          ? HIDDEN_COLOR  // Orange for hidden services
+          : GENERAL_COLOR; // Green for general or all
+        
         result.push(
           new LineLayer<PathData>({
             id: 'particle-paths',
@@ -208,10 +214,10 @@ export function useParticleLayer({
               // Apply opacity factor
               alpha = Math.min(255, Math.max(0, Math.round(alpha * lineOpacityFactor)));
               
-              return [0, 255, 136, alpha]; // Tor Green
+              return [lineColor[0], lineColor[1], lineColor[2], alpha];
             },
             updateTriggers: {
-              getColor: [tick, lineOpacityFactor], // Update colors when opacity changes
+              getColor: [tick, lineOpacityFactor, trafficType], // Update colors when traffic type changes
             }
           })
         );
@@ -242,7 +248,7 @@ export function useParticleLayer({
     );
 
     return result;
-  }, [visible, filteredPositions, particleSize, tick, lineDensityFactor, lineOpacityFactor]);
+  }, [visible, filteredPositions, particleSize, tick, lineDensityFactor, lineOpacityFactor, trafficType]);
 
   return layers;
 }

@@ -70,6 +70,7 @@ export default function TorMap({ dataUrl }: TorMapProps) {
   const [lineOpacityFactor, setLineOpacityFactor] = useState(1.0);
   const [lineSpeedFactor, setLineSpeedFactor] = useState(2.0); // 200% of original speed
   const [showSettings, setShowSettings] = useState(false);
+  const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
 
   // Clear hover/popup when relay layer is hidden
   const handleLayerVisibilityChange = useCallback((newVisibility: LayerVisibility) => {
@@ -165,34 +166,38 @@ export default function TorMap({ dataUrl }: TorMapProps) {
     loadCountryGeoJson();
   }, []);
 
-  // Generate mock country data from relay data (until we have real client data)
+  // Load real country client data from Tor Metrics
   useEffect(() => {
-    if (!relayData) return;
+    if (!currentDate) return;
     
-    // For now, generate mock data based on relay locations
-    // In production, this would come from Tor metrics API
-    const mockData: CountryHistogram = {};
+    async function loadCountryData() {
+      try {
+        // Try to load pre-fetched country data for this date
+        let response;
+        try {
+          response = await fetch(`/data/countries-${currentDate}.json`);
+          if (!response.ok) throw new Error('Local not found');
+        } catch {
+          // Fallback to remote storage
+          response = await fetch(`${dataUrl}/countries-${currentDate}.json`);
+        }
+        
+        if (response.ok) {
+          const data = await response.json();
+          // data.countries is the CountryHistogram: { "US": 444507, "DE": 224891, ... }
+          setCountryData(data.countries || data);
+        } else {
+          // No country data available for this date, clear
+          setCountryData({});
+        }
+      } catch (err) {
+        console.warn('Could not load country data:', err);
+        setCountryData({});
+      }
+    }
     
-    // This is placeholder - real implementation would fetch from metrics
-    // For now, just show that the layer works
-    relayData.nodes.forEach(node => {
-      // Estimate country from lat/lng (very rough approximation for demo)
-      // Real implementation would have country codes in the relay data
-      const lat = node.lat;
-      const lng = node.lng;
-      
-      // Very basic region detection for demo purposes
-      let cc = 'XX';
-      if (lat > 35 && lat < 70 && lng > -10 && lng < 40) cc = 'EU';
-      else if (lat > 25 && lat < 50 && lng > -130 && lng < -60) cc = 'US';
-      else if (lat > -35 && lat < 5 && lng > -80 && lng < -35) cc = 'BR';
-      else if (lat > 20 && lat < 55 && lng > 70 && lng < 150) cc = 'CN';
-      
-      mockData[cc] = (mockData[cc] || 0) + node.bandwidth;
-    });
-    
-    setCountryData(mockData);
-  }, [relayData]);
+    loadCountryData();
+  }, [currentDate, dataUrl]);
 
   // Fetch relay data when date changes
   useEffect(() => {
@@ -288,7 +293,7 @@ export default function TorMap({ dataUrl }: TorMapProps) {
     speedFactor: lineSpeedFactor,
     offsetFactor: config.particleOffset.default,
     hiddenServiceProbability: config.hiddenServiceProbability,
-    trafficType: 'all',
+    trafficType,
     lineDensityFactor,
     lineOpacityFactor,
   });
@@ -640,7 +645,7 @@ export default function TorMap({ dataUrl }: TorMapProps) {
             </div>
 
             {/* Speed Slider */}
-            <div>
+            <div className="mb-3">
               <div className="flex justify-between text-[10px] text-gray-400 mb-1">
                 <span>Speed</span>
                 <span>{(lineSpeedFactor * 100).toFixed(0)}%</span>
@@ -654,6 +659,49 @@ export default function TorMap({ dataUrl }: TorMapProps) {
                 onChange={(e) => setLineSpeedFactor(parseFloat(e.target.value))}
                 className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
               />
+            </div>
+
+            {/* Traffic Type Toggle */}
+            <div className="pt-2 border-t border-white/10">
+              <div className="text-[10px] text-gray-400 mb-2">Traffic Type</div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setTrafficType('all')}
+                  className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+                    trafficType === 'all'
+                      ? 'bg-cyan-500 text-black'
+                      : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  onClick={() => setTrafficType('general')}
+                  className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+                    trafficType === 'general'
+                      ? 'bg-tor-green text-black'
+                      : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                  }`}
+                >
+                  <span className="flex items-center justify-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-[#00ff88]" />
+                    General
+                  </span>
+                </button>
+                <button
+                  onClick={() => setTrafficType('hidden')}
+                  className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+                    trafficType === 'hidden'
+                      ? 'bg-tor-orange text-black'
+                      : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                  }`}
+                >
+                  <span className="flex items-center justify-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-[#ff6600]" />
+                    Hidden
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         )}
