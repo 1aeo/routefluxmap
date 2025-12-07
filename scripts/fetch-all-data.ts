@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * RouteFluxMap - Unified Data Fetcher v3.1.0
+ * RouteFluxMap - Unified Data Fetcher v3.8.2
  * 
  * Single entry point for all Tor network data fetching.
  * Automatically routes to the appropriate data source:
@@ -21,8 +21,15 @@
  *   npx tsx scripts/fetch-all-data.ts 12/07/25     # Specific day (mm/dd/yy)
  *   npx tsx scripts/fetch-all-data.ts 12/25        # Entire month (mm/yy)
  *   npx tsx scripts/fetch-all-data.ts 25           # Entire year (yy)
- *   npx tsx scripts/fetch-all-data.ts --parallel=5 # Control concurrency
+ *   npx tsx scripts/fetch-all-data.ts --parallel=5 # Control day concurrency
+ *   npx tsx scripts/fetch-all-data.ts --threads=4  # XZ decompression threads (default: 4)
  *   npx tsx scripts/fetch-all-data.ts --geoip=/path/to/GeoLite2-City.mmdb
+ * 
+ * Resource Requirements (for historical data processing):
+ *   --threads=1: ~4GB RAM (slowest, minimum memory)
+ *   --threads=4: ~6GB RAM (default, good balance)
+ *   --threads=0: ~9GB RAM (all cores, same speed as -T4)
+ *   Processing 1 month: ~70-80 seconds with default settings
  */
 
 import * as fs from 'fs';
@@ -44,13 +51,18 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 // Version Information
 // ============================================================================
 
-const SCRIPT_VERSION = '3.6.0';
+const SCRIPT_VERSION = '3.8.2';  // Parse lock + -T4 (optimal: same speed as -T0, less RAM)
 const DATA_FORMAT_VERSION = '2.1';
 
 // Parallel defaults based on workload type
 const DEFAULT_PARALLEL_DAY = 1;
 const DEFAULT_PARALLEL_MONTH = 8;
 const DEFAULT_PARALLEL_YEAR = 12;  // Reduced from 15 to avoid overwhelming servers
+
+// XZ decompression threads (configurable via --threads=N)
+// Testing showed -T4 and -T0 have identical speed, but -T4 uses 33% less RAM
+const DEFAULT_XZ_THREADS = 4;
+let XZ_THREADS = DEFAULT_XZ_THREADS;
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -596,6 +608,7 @@ async function processOnionooRelays(data: OnionooResponse): Promise<ProcessedRel
 // Tracks in-progress downloads and extractions to prevent race conditions
 const downloadLocks: Map<string, Promise<string | null>> = new Map();
 const extractionLocks: Map<string, Promise<string | null>> = new Map();
+const descriptorParseLocks: Map<string, Promise<Map<string, number>>> = new Map();
 
 async function withLock<T>(
   locks: Map<string, Promise<T>>,
@@ -854,24 +867,90 @@ async function ensureExtractedConsensus(year: number, month: number): Promise<st
 async function loadDescriptorBandwidth(year: number, month: number): Promise<Map<string, number>> {
   const monthStr = `${year}-${String(month).padStart(2, '0')}`;
   
-  // Return cached if available
+  // Return in-memory cached if available (fastest - same process)
   if (descriptorBandwidthCache.has(monthStr)) {
     return descriptorBandwidthCache.get(monthStr)!;
   }
   
-  const archivePath = await ensureDescriptorArchive(year, month);
-  if (!archivePath) {
+  // Use lock to prevent multiple parallel workers from parsing the same archive
+  // This prevents 8× RAM usage and 8× duplicate work when workers start simultaneously
+  const lockKey = `descriptor-parse-${monthStr}`;
+  const existingLock = descriptorParseLocks.get(lockKey);
+  if (existingLock) {
+    console.log(`    ⏳ Waiting for descriptor parse (another worker is processing)...`);
+    return existingLock;
+  }
+  
+  // Start the parsing operation and store promise for other workers to await
+  const parsePromise = loadDescriptorBandwidthInternal(year, month, monthStr);
+  descriptorParseLocks.set(lockKey, parsePromise);
+  
+  try {
+    return await parsePromise;
+  } finally {
+    descriptorParseLocks.delete(lockKey);
+  }
+}
+
+async function loadDescriptorBandwidthInternal(year: number, month: number, monthStr: string): Promise<Map<string, number>> {
+  // Double-check in-memory cache after acquiring lock (another worker may have finished)
+  if (descriptorBandwidthCache.has(monthStr)) {
+    console.log(`    ✓ Using in-memory cache (populated by another worker)`);
+    return descriptorBandwidthCache.get(monthStr)!;
+  }
+  
+  // OPTIMIZATION 2: Check for JSON cache file (fast - ~50ms vs ~100s parsing)
+  const jsonCachePath = path.join(CACHE_DIR, `bandwidth-cache-${monthStr}.json`);
+  const archivePath = path.join(CACHE_DIR, `server-descriptors-${monthStr}.tar.xz`);
+  
+  if (fs.existsSync(jsonCachePath)) {
+    try {
+      const cacheStats = fs.statSync(jsonCachePath);
+      // Validate cache is newer than archive (if archive exists)
+      const archiveExists = fs.existsSync(archivePath);
+      const archiveStats = archiveExists ? fs.statSync(archivePath) : null;
+      
+      if (!archiveExists || cacheStats.mtime > archiveStats!.mtime) {
+        const loadStart = Date.now();
+        const data = JSON.parse(fs.readFileSync(jsonCachePath, 'utf-8'));
+        const bandwidthMap = new Map<string, number>(Object.entries(data).map(([k, v]) => [k, v as number]));
+        const elapsed = Date.now() - loadStart;
+        console.log(`    ✓ Loaded bandwidth cache for ${monthStr} (${bandwidthMap.size} relays, ${elapsed}ms)`);
+        descriptorBandwidthCache.set(monthStr, bandwidthMap);
+        return bandwidthMap;
+      }
+    } catch (e: any) {
+      console.log(`    ⚠ Invalid bandwidth cache, will re-parse: ${e.message}`);
+    }
+  }
+  
+  // Need to download/parse - ensure archive exists
+  const downloadedPath = await ensureDescriptorArchive(year, month);
+  if (!downloadedPath) {
     return new Map();
   }
   
-  console.log(`    📄 Parsing server descriptors for ${monthStr} (streaming)...`);
+  // OPTIMIZATION 1: Use multi-threaded XZ decompression
+  // Testing showed -T4 and -T0 have identical speed (~72s total), but:
+  // -T4: 6GB peak RAM, -T0: 9GB peak RAM → -T4 is default
+  // Configurable via --threads=N (0 = all cores)
+  const threadArg = XZ_THREADS === 0 ? '-T0' : `-T${XZ_THREADS}`;
+  console.log(`    📄 Parsing server descriptors for ${monthStr} (xz ${threadArg}, single worker)...`);
   const parseStart = Date.now();
   const bandwidthMap = new Map<string, number>();
   
   return new Promise((resolve) => {
-    // Use spawn to stream output instead of buffering everything in memory
-    // This avoids maxBuffer limits for large archives (some months are 2GB+ uncompressed)
-    const tar = spawn('tar', ['-xf', archivePath, '--xz', '-O']);
+    // Parse lock ensures only 1 xz runs at a time
+    const xz = spawn('xz', [threadArg, '-dc', downloadedPath]);
+    const tar = spawn('tar', ['-xf', '-', '-O']);
+    
+    // Pipe xz output to tar input
+    xz.stdout.pipe(tar.stdin);
+    
+    xz.on('error', (err) => {
+      console.log(`    ⚠ xz error: ${err.message}, falling back to single-threaded`);
+      // Fallback handled by tar error
+    });
     
     tar.on('error', (err) => {
       console.log(`    ⚠ Failed to spawn tar: ${err.message}`);
@@ -897,7 +976,6 @@ async function loadDescriptorBandwidth(year: number, month: number): Promise<Map
         if (match) {
           const observedBandwidth = parseInt(match[1], 10);
           // Filter out bogus values: INT_MAX (2^31-1 = 2147483647) indicates overflow
-          // Real relay bandwidth typically maxes around 500 MB/s
           if (observedBandwidth >= 2147483647) {
             currentFingerprint = null;
             return;
@@ -918,11 +996,25 @@ async function loadDescriptorBandwidth(year: number, month: number): Promise<Map
     rl.on('close', () => {
       const elapsed = ((Date.now() - parseStart) / 1000).toFixed(1);
       console.log(`    ✓ Parsed ${bandwidthMap.size} relay bandwidths (${elapsed}s)`);
+      
+      // OPTIMIZATION 2: Save to JSON cache for future runs
+      if (bandwidthMap.size > 0) {
+        try {
+          const cacheData = Object.fromEntries(bandwidthMap);
+          fs.writeFileSync(jsonCachePath, JSON.stringify(cacheData));
+          const cacheSizeKB = Math.round(fs.statSync(jsonCachePath).size / 1024);
+          console.log(`    ✓ Saved bandwidth cache (${cacheSizeKB}KB)`);
+        } catch (e: any) {
+          console.log(`    ⚠ Failed to save bandwidth cache: ${e.message}`);
+        }
+      }
+      
       descriptorBandwidthCache.set(monthStr, bandwidthMap);
       resolve(bandwidthMap);
     });
     
     // Consume stderr to prevent blocking
+    xz.stderr.on('data', () => {});
     tar.stderr.on('data', () => {});
   });
 }
@@ -1444,6 +1536,11 @@ async function main() {
   for (const arg of args) {
     if (arg.startsWith('--parallel=')) {
       parallelOverride = parseInt(arg.slice(11)) || null;
+    } else if (arg.startsWith('--threads=')) {
+      const threads = parseInt(arg.slice(10));
+      if (!isNaN(threads) && threads >= 0) {
+        XZ_THREADS = threads;
+      }
     } else if (arg.startsWith('--geoip=')) {
       GEOIP_DB_PATH = arg.slice(8);
     }
@@ -1488,6 +1585,7 @@ async function main() {
   console.log(`    Date range:      ${dateRange.description}`);
   console.log(`    Dates to fetch:  ${targetDates.length}`);
   console.log(`    Parallel:        ${parallel}`);
+  console.log(`    XZ threads:      ${XZ_THREADS === 0 ? '0 (all cores)' : XZ_THREADS}`);
   console.log(`    GeoIP database:  ${GEOIP_DB_PATH}`);
   console.log(`    Cache:           ${CACHE_DIR}`);
   console.log(`    Output:          ${OUTPUT_DIR}`);

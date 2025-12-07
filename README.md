@@ -106,6 +106,43 @@ npm run fetch-data
 ./deploy/scripts/update.sh
 ```
 
+### Historical Data Processing
+
+The script can fetch historical data from Tor Collector archives:
+
+```bash
+# Fetch a specific day (mm/dd/yy)
+npx tsx scripts/fetch-all-data.ts 12/07/25
+
+# Fetch an entire month (mm/yy)
+npx tsx scripts/fetch-all-data.ts 11/25
+
+# Fetch an entire year (yy)
+npx tsx scripts/fetch-all-data.ts 25
+
+# With custom parallelism and thread settings
+npx tsx scripts/fetch-all-data.ts 11/25 --parallel=4 --threads=2
+```
+
+#### Resource Requirements
+
+Historical data processing downloads and parses large archive files (~400MB compressed). Resource usage depends on the `--threads` setting:
+
+| Setting | RAM Usage | Speed | Notes |
+|---------|-----------|-------|-------|
+| `--threads=1` | ~4GB | Slowest | Minimum memory systems |
+| `--threads=4` | ~6GB | Fast | **Default, recommended** |
+| `--threads=0` | ~9GB | Fast | All CPU cores (same speed as -T4) |
+
+**Typical processing times:**
+- 1 day: ~3 seconds
+- 1 month: ~70 seconds (first run), ~23 seconds (cached)
+- 1 year: ~15 minutes (first run)
+
+**Caching:** The script caches bandwidth data per month (~500KB JSON). Subsequent runs for the same month are ~3x faster.
+
+**Low-memory systems:** Use `--threads=1 --parallel=1` for systems with <8GB RAM.
+
 ## 🚀 Deployment
 
 ### Static Site (Cloudflare Pages)
