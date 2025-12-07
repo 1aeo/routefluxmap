@@ -1,0 +1,23 @@
+# RouteFluxMap - Cloudflare Pages Configuration
+# ==============================================
+# This template is used to generate wrangler.toml at deploy time.
+# Values are pulled from config.env by the deploy script.
+#
+# DO NOT edit wrangler.toml directly - it will be overwritten.
+# Edit config.env instead, then run: ./deploy/scripts/pages-deploy.sh
+
+name = "{{CF_PAGES_PROJECT}}"
+compatibility_date = "2024-12-01"
+pages_build_output_dir = "dist"
+
+# R2 bucket binding (for native R2 access without custom domain)
+{{R2_BUCKET_SECTION}}
+
+[vars]
+# Storage fetch order (comma-separated: do, r2)
+# First = primary, second = fallback
+STORAGE_ORDER = "{{STORAGE_ORDER}}"
+
+# DO Spaces URL (for HTTP fetch fallback)
+{{DO_SPACES_URL_VAR}}
+
