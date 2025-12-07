@@ -45,6 +45,7 @@ ensure_r2_remote() {
             secret_access_key="$r2_secret" \
             endpoint="https://${cf_account}.r2.cloudflarestorage.com" \
             acl=private \
+            no_check_bucket=true \
             --non-interactive
         log "   ✅ Remote 'r2' configured"
     fi
