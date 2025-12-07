@@ -31,6 +31,10 @@ export class ParticleSystem {
   private hiddenServiceProbability = 0.04;
   private baseSpeed = 0.0005; // Units per frame
   
+  // Pre-allocated position cache to reduce GC pressure at 60fps
+  // Instead of creating 50k+ new objects every ~33ms, we reuse this array
+  private positionCache: ParticleState[] = [];
+  
   constructor() {}
 
   /**
@@ -135,9 +139,24 @@ export class ParticleSystem {
   /**
    * Get current positions of all particles
    * Uses simple linear interpolation for straight-line paths
+   * 
+   * OPTIMIZED: Reuses pre-allocated positionCache to avoid creating
+   * 50,000+ new objects every ~33ms (30 calls/second at 60fps).
+   * This significantly reduces GC pressure during animation.
    */
   getPositions(): ParticleState[] {
-    return this.particles.map(p => {
+    const particleCount = this.particles.length;
+    
+    // Expand cache only when needed (never shrink to avoid reallocations)
+    while (this.positionCache.length < particleCount) {
+      this.positionCache.push({ lng: 0, lat: 0, isHiddenService: false });
+    }
+    
+    // Update positions in-place
+    for (let i = 0; i < particleCount; i++) {
+      const p = this.particles[i];
+      const state = this.positionCache[i];
+      
       // Handle wrapping around Pacific Ocean for shortest path
       let startLng = p.startLng;
       let endLng = p.endLng;
@@ -158,12 +177,15 @@ export class ParticleSystem {
       while (lng > 180) lng -= 360;
       while (lng < -180) lng += 360;
       
-      return {
-        lng,
-        lat,
-        isHiddenService: p.isHiddenService,
-      };
-    });
+      // Update in place instead of creating new object
+      state.lng = lng;
+      state.lat = lat;
+      state.isHiddenService = p.isHiddenService;
+    }
+    
+    // Return slice to avoid exposing extra cached elements
+    // Note: slice() creates a new array reference but reuses the ParticleState objects
+    return this.positionCache.slice(0, particleCount);
   }
 
   /**
