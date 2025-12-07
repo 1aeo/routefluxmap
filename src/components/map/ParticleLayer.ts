@@ -192,6 +192,42 @@ const defaultProps: Partial<ParticleLayerProps> = {
 };
 
 /**
+ * Build cumulative probability array for binary search
+ */
+function buildCumulativeProbs(nodes: AggregatedNode[]): number[] {
+  let sum = 0;
+  return nodes.map(n => {
+    sum += n.normalized_bandwidth;
+    return sum;
+  });
+}
+
+/**
+ * Get probabilistic node index using binary search (O(log n) instead of O(n))
+ */
+function getProbabilisticIndex(nodes: AggregatedNode[], cumulativeProbs: number[]): number {
+  if (cumulativeProbs.length === 0) return 0;
+  
+  const total = cumulativeProbs[cumulativeProbs.length - 1];
+  const rnd = Math.random() * total;
+  
+  // Binary search
+  let left = 0;
+  let right = cumulativeProbs.length - 1;
+  
+  while (left < right) {
+    const mid = Math.floor((left + right) / 2);
+    if (cumulativeProbs[mid] < rnd) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  
+  return Math.min(left, nodes.length - 1);
+}
+
+/**
  * Generate particle data from nodes
  * Creates source/dest pairs weighted by bandwidth
  */
@@ -203,28 +239,20 @@ function generateParticleData(nodes: AggregatedNode[], count: number, offset: nu
   const positions = new Float32Array(count * 4);  // start.xy, end.xy
   const offsets = new Float32Array(count * 4);    // t0, offset0, t1, offset1
 
-  // Get probabilistic node index based on bandwidth
-  const getProbabilisticIndex = (): number => {
-    let rnd = Math.random();
-    let i = 0;
-    while (i < nodes.length && rnd > nodes[i].normalized_bandwidth) {
-      rnd -= nodes[i].normalized_bandwidth;
-      i++;
-    }
-    return Math.min(i, nodes.length - 1);
-  };
+  // Pre-compute cumulative probabilities once for all selections
+  const cumulativeProbs = buildCumulativeProbs(nodes);
 
   // Get a source/dest pair (must be different)
   const getPair = (): [AggregatedNode, AggregatedNode] => {
     const maxTries = 500;
     let tries = 0;
-    let source = getProbabilisticIndex();
-    let dest = getProbabilisticIndex();
-    while (source === dest && tries < maxTries) {
-      dest = getProbabilisticIndex();
+    let sourceIdx = getProbabilisticIndex(nodes, cumulativeProbs);
+    let destIdx = getProbabilisticIndex(nodes, cumulativeProbs);
+    while (sourceIdx === destIdx && tries < maxTries) {
+      destIdx = getProbabilisticIndex(nodes, cumulativeProbs);
       tries++;
     }
-    return [nodes[source], nodes[dest]];
+    return [nodes[sourceIdx], nodes[destIdx]];
   };
 
   for (let i = 0; i < count; i++) {

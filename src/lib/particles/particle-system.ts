@@ -28,6 +28,7 @@ export interface ParticleState {
 export class ParticleSystem {
   private particles: Particle[] = [];
   private nodes: AggregatedNode[] = [];
+  private cumulativeProbs: number[] = []; // Pre-computed cumulative probabilities for binary search
   private hiddenServiceProbability = 0.04;
   private baseSpeed = 0.0005; // Units per frame
   
@@ -51,13 +52,28 @@ export class ParticleSystem {
 
     if (!nodes || nodes.length < 2) {
       this.particles = [];
+      this.cumulativeProbs = [];
       return;
     }
+
+    // Build cumulative probability array for O(log n) selection
+    this._buildCumulativeProbs();
 
     this.particles = [];
     for (let i = 0; i < particleCount; i++) {
       this.particles.push(this.createParticle(i));
     }
+  }
+
+  /**
+   * Build cumulative probability array for binary search
+   */
+  private _buildCumulativeProbs(): void {
+    let sum = 0;
+    this.cumulativeProbs = this.nodes.map(n => {
+      sum += n.normalized_bandwidth;
+      return sum;
+    });
   }
 
   /**
@@ -79,16 +95,29 @@ export class ParticleSystem {
   }
 
   /**
-   * Get probabilistic node index based on bandwidth
+   * Get probabilistic node index based on bandwidth using binary search
+   * O(log n) instead of O(n) linear search
    */
   private getProbabilisticIndex(): number {
-    let rnd = Math.random();
-    let i = 0;
-    while (i < this.nodes.length && rnd > this.nodes[i].normalized_bandwidth) {
-      rnd -= this.nodes[i].normalized_bandwidth;
-      i++;
+    if (this.cumulativeProbs.length === 0) return 0;
+    
+    const total = this.cumulativeProbs[this.cumulativeProbs.length - 1];
+    const rnd = Math.random() * total;
+    
+    // Binary search for the index
+    let left = 0;
+    let right = this.cumulativeProbs.length - 1;
+    
+    while (left < right) {
+      const mid = Math.floor((left + right) / 2);
+      if (this.cumulativeProbs[mid] < rnd) {
+        left = mid + 1;
+      } else {
+        right = mid;
+      }
     }
-    return Math.min(i, this.nodes.length - 1);
+    
+    return Math.min(left, this.nodes.length - 1);
   }
 
   /**
@@ -221,6 +250,18 @@ export class ParticleSystem {
     } else {
       // Remove particles
       this.particles = this.particles.slice(0, count);
+    }
+  }
+
+  /**
+   * Update nodes and rebuild cumulative probabilities
+   */
+  setNodes(nodes: AggregatedNode[]): void {
+    this.nodes = nodes;
+    if (nodes && nodes.length >= 2) {
+      this._buildCumulativeProbs();
+    } else {
+      this.cumulativeProbs = [];
     }
   }
 }

@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { DateIndex } from '../../lib/types';
+import { formatDate, formatDateShort } from '../../lib/utils/format';
 
 interface DateSliderChartProps {
   dateIndex: DateIndex;
@@ -18,25 +19,6 @@ function formatBandwidth(gbits: number): string {
     return `${(gbits / 1000).toFixed(1)} Tbps`;
   }
   return `${gbits.toFixed(1)} Gbps`;
-}
-
-// Format date for display
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
-// Format date for short display
-function formatDateShort(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    year: 'numeric',
-  });
 }
 
 // Interpolate between two colors

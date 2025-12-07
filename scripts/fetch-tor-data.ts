@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
+import { countryCentroids } from '../src/lib/utils/geo';
 
 // Types
 interface OnionooRelay {
@@ -85,27 +86,8 @@ const envConfig = loadConfig();
 const GEOIP_DB_PATH = envConfig.GEOIP_DB_PATH || path.join(process.cwd(), 'data', 'geoip', 'GeoLite2-City.mmdb');
 const OUTPUT_DIR = path.join(process.cwd(), 'public', 'data');
 
-// Country centroids as fallback (lng, lat)
-const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
-  'AD': [1.52, 42.55], 'AE': [53.85, 23.42], 'AF': [67.71, 33.94], 'AL': [20.17, 41.15],
-  'AM': [45.04, 40.07], 'AO': [17.87, -11.20], 'AR': [-63.62, -38.42], 'AT': [14.55, 47.52],
-  'AU': [133.78, -25.27], 'AZ': [47.58, 40.14], 'BA': [17.68, 43.92], 'BD': [90.36, 23.68],
-  'BE': [4.47, 50.50], 'BG': [25.49, 42.73], 'BR': [-51.93, -14.24], 'BY': [27.95, 53.71],
-  'CA': [-106.35, 56.13], 'CH': [8.23, 46.82], 'CL': [-71.54, -35.68], 'CN': [104.20, 35.86],
-  'CO': [-74.30, 4.57], 'CZ': [15.47, 49.82], 'DE': [10.45, 51.17], 'DK': [9.50, 56.26],
-  'EE': [25.01, 58.60], 'EG': [30.80, 26.82], 'ES': [-3.75, 40.46], 'FI': [25.75, 61.92],
-  'FR': [2.21, 46.23], 'GB': [-3.44, 55.38], 'GE': [43.36, 42.32], 'GR': [21.82, 39.07],
-  'HK': [114.11, 22.40], 'HR': [15.20, 45.10], 'HU': [19.50, 47.16], 'ID': [113.92, -0.79],
-  'IE': [-8.24, 53.41], 'IL': [34.85, 31.05], 'IN': [78.96, 20.59], 'IR': [53.69, 32.43],
-  'IS': [-19.02, 64.96], 'IT': [12.57, 41.87], 'JP': [138.25, 36.20], 'KR': [127.77, 35.91],
-  'KZ': [66.92, 48.02], 'LT': [23.88, 55.17], 'LU': [6.13, 49.82], 'LV': [24.60, 56.88],
-  'MD': [28.37, 47.41], 'MX': [-102.55, 23.63], 'MY': [101.98, 4.21], 'NL': [5.29, 52.13],
-  'NO': [8.47, 60.47], 'NZ': [174.89, -40.90], 'PL': [19.15, 51.92], 'PT': [-8.22, 39.40],
-  'RO': [24.97, 45.94], 'RS': [21.01, 44.02], 'RU': [105.32, 61.52], 'SE': [18.64, 60.13],
-  'SG': [103.82, 1.35], 'SI': [15.00, 46.15], 'SK': [19.70, 48.67], 'TH': [100.99, 15.87],
-  'TR': [35.24, 38.96], 'TW': [120.96, 23.70], 'UA': [31.17, 48.38], 'US': [-95.71, 37.09],
-  'VN': [108.28, 14.06], 'ZA': [22.94, -30.56],
-};
+// Use country centroids from shared geo utility
+const COUNTRY_CENTROIDS = countryCentroids;
 
 // Mercator projection
 function getNormalizedPosition(lat: number, lng: number): { x: number; y: number } {
@@ -150,7 +132,7 @@ function getCountryCoords(countryCode?: string): { lat: number; lng: number } {
   const cc = (countryCode || 'US').toUpperCase();
   const coords = COUNTRY_CENTROIDS[cc] || COUNTRY_CENTROIDS['US'];
   return {
-    lat: coords[1] + (Math.random() - 0.5) * 2,
+    lat: coords[1] + (Math.random() - 0.5) * 2, // Note: geo.ts stores as [lng, lat]
     lng: coords[0] + (Math.random() - 0.5) * 2,
   };
 }

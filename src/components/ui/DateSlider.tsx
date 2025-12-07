@@ -4,30 +4,12 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { DateIndex } from '../../lib/types';
+import { formatDate, formatDateShort } from '../../lib/utils/format';
 
 interface DateSliderProps {
   dateIndex: DateIndex;
   currentDate: string;
   onDateChange: (date: string) => void;
-}
-
-// Format date for display
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
-// Format date for short display
-function formatDateShort(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    year: 'numeric',
-  });
 }
 
 export default function DateSlider({ dateIndex, currentDate, onDateChange }: DateSliderProps) {

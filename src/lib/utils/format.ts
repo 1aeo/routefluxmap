@@ -43,27 +43,41 @@ export function formatBandwidth(bytes: number): string {
 }
 
 /**
- * Format a date string to friendly format
+ * Format a date string to medium format (month, day, year)
+ * Example: "Jan 1, 2024"
  */
 export function formatDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Format a date string to short format (month, year)
+ * Example: "Jan 2024"
+ */
+export function formatDateShort(dateStr: string): string {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Format a date string to full format (weekday, month, day, year)
+ * Example: "Monday, January 1, 2024"
+ */
+export function formatDateFull(dateStr: string): string {
   const date = new Date(dateStr);
   return date.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
-  });
-}
-
-/**
- * Format a date string to short format
- */
-export function formatDateShort(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
   });
 }
 

@@ -21,6 +21,7 @@ import * as path from 'path';
 import * as https from 'https';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { countryCentroids } from '../src/lib/utils/geo';
 
 const execAsync = promisify(exec);
 
@@ -30,14 +31,8 @@ const CACHE_DIR = path.join(PROJECT_DIR, 'data', 'cache');
 const OUTPUT_DIR = path.join(PROJECT_DIR, 'public', 'data');
 const GEOIP_DB_PATH = path.join(PROJECT_DIR, 'data', 'geoip', 'GeoLite2-City.mmdb');
 
-// Country centroids for fallback (lng, lat)
-const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
-  'US': [-95.71, 37.09], 'DE': [10.45, 51.17], 'FR': [2.21, 46.23], 'NL': [5.29, 52.13],
-  'GB': [-3.44, 55.38], 'CA': [-106.35, 56.13], 'SE': [18.64, 60.13], 'CH': [8.23, 46.82],
-  'RU': [105.32, 61.52], 'AU': [133.78, -25.27], 'JP': [138.25, 36.20], 'IT': [12.57, 41.87],
-  'ES': [-3.75, 40.46], 'PL': [19.15, 51.92], 'BR': [-51.93, -14.24], 'AT': [14.55, 47.52],
-  'FI': [25.75, 61.92], 'RO': [24.97, 45.94], 'CZ': [15.47, 49.82], 'NO': [8.47, 60.47],
-};
+// Use country centroids from shared geo utility
+const COUNTRY_CENTROIDS = countryCentroids;
 
 // Types
 interface RelayInfo {
