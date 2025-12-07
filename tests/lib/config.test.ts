@@ -24,7 +24,9 @@ describe('getRelayMetricsUrl', () => {
   it('removes colons from fingerprints', () => {
     const fp = '7E:AA:C4:D0:E1:AC:54:E8:88:C4:9F:2F:0C:6B:F5:B2:DD:FB:4C:4A';
     const url = getRelayMetricsUrl(fp);
-    expect(url).not.toContain(':');
+    // URL contains :// from protocol, but fingerprint portion should not have colons
+    const fingerprintPart = url.split('/relay/')[1];
+    expect(fingerprintPart).not.toContain(':');
   });
 
   it('removes spaces from fingerprints', () => {

@@ -1,0 +1,4 @@
+# Pre-commit hook: Quick type check before each commit
+# Runs in ~8 seconds - catches type errors early
+
+npm run typecheck
