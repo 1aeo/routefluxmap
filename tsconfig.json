@@ -10,5 +10,5 @@
       "@lib/*": ["src/lib/*"]
     }
   },
-  "exclude": ["scripts/**/*"]
+  "exclude": ["scripts/**/*", "tests/**/*", "vitest.config.ts"]
 }
