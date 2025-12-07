@@ -15,6 +15,7 @@ interface DateSliderChartProps {
   dateIndex: DateIndex;
   currentDate: string;
   onDateChange: (date: string) => void;
+  playbackSpeed?: number; // 0.1 to 4.0, default 1.0 (1x speed)
 }
 
 // Aggregation mode
@@ -179,9 +180,9 @@ function aggregateByYear(dates: string[], bandwidths: number[]): AggregatedData[
   return Array.from(yearMap.values());
 }
 
-export default function DateSliderChart({ dateIndex, currentDate, onDateChange }: DateSliderChartProps) {
+export default function DateSliderChart({ dateIndex, currentDate, onDateChange, playbackSpeed = 1.0 }: DateSliderChartProps) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playSpeed] = useState(500);
+  const playSpeed = Math.round(500 / playbackSpeed); // Base 500ms adjusted by speed multiplier
   const [containerWidth, setContainerWidth] = useState(MAX_SLIDER_WIDTH);
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -392,35 +393,37 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange }
     >
       {/* Main timeline with bars */}
       <div className="flex items-end gap-1">
-        {/* Previous button */}
-        <button
-          onClick={goToPrevious}
-          disabled={currentIndex === 0}
-          className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          aria-label="Previous date"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
-        
-        {/* Play/Pause button */}
-        <button
-          onClick={togglePlay}
-          className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 transition-colors"
-          aria-label={isPlaying ? 'Pause' : 'Play'}
-        >
-          {isPlaying ? (
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="4" width="4" height="16" />
-              <rect x="14" y="4" width="4" height="16" />
+        {/* Left controls - Play button stacked above Previous button */}
+        <div className="flex flex-col items-center gap-3 flex-shrink-0">
+          {/* Play/Pause button */}
+          <button
+            onClick={togglePlay}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 transition-colors"
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+          >
+            {isPlaying ? (
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="4" width="4" height="16" />
+                <rect x="14" y="4" width="4" height="16" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            )}
+          </button>
+          {/* Previous button */}
+          <button
+            onClick={goToPrevious}
+            disabled={currentIndex === 0}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            aria-label="Previous date"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
             </svg>
-          ) : (
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
+          </button>
+        </div>
         
         {/* Bandwidth bars - fixed height container */}
         <div 
