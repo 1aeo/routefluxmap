@@ -27,8 +27,8 @@ export interface ParticleOverlayProps {
   offsetFactor?: number;
   hiddenServiceProbability?: number;
   trafficType?: 'all' | 'hidden' | 'general';
-  lineDensityFactor?: number; // 0.1 to 2.0, default 1.0
-  lineOpacityFactor?: number; // 0.1 to 2.0, default 1.0
+  lineDensityFactor?: number; // 0.1 to 6.0, default 4.0
+  lineOpacityFactor?: number; // 0.1 to 6.0, default 4.0
   onLayerUpdate?: (layers: Layer[] | null) => void;
 }
 
