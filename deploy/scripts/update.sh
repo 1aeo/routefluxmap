@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # RouteFluxMap Deploy - Main Update Script
-# Fetches data from Tor APIs, uploads to configured storage backends
-# Cron: 0 */4 * * * /path/to/deploy/scripts/update.sh >> /path/to/deploy/logs/update.log 2>&1
+# Fetches data locally, uploads to storage backends incrementally during long runs
+#
+# Usage:
+#   ./update.sh                          # Current day (fetch, then upload)
+#   ./update.sh 24                       # Year 2024 (upload every 30 days)
+#   ./update.sh 12/24                    # December 2024 (upload every 10 days)
+#   ./update.sh 24 --parallel=8          # Year with 8 concurrent days
+#   ./update.sh 24 --upload-interval=15  # Custom upload interval
+#
+# Cron (daily):
+#   0 4 * * * /path/to/deploy/scripts/update.sh >> /path/to/deploy/logs/update.log 2>&1
 
 set -euo pipefail
 
@@ -26,12 +35,99 @@ DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$(dirname "$DEPLOY_DIR")"
 
 # ============================================================================
+# Parse Command Line Arguments
+# ============================================================================
+DATE_RANGE=""
+PARALLEL=""
+UPLOAD_INTERVAL=""
+SHOW_HELP=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --parallel=*)
+            PARALLEL="${arg#*=}"
+            ;;
+        --upload-interval=*)
+            UPLOAD_INTERVAL="${arg#*=}"
+            ;;
+        --help|-h)
+            SHOW_HELP=true
+            ;;
+        --*)
+            echo "Unknown option: $arg"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+        *)
+            # Positional argument = date range
+            DATE_RANGE="$arg"
+            ;;
+    esac
+done
+
+if [[ "$SHOW_HELP" == "true" ]]; then
+    echo "RouteFluxMap Update Script"
+    echo ""
+    echo "Usage: $0 [date_range] [options]"
+    echo ""
+    echo "Fetches Tor network data locally, uploads to storage backends incrementally."
+    echo ""
+    echo "Date Range (optional):"
+    echo "  (none)      Current day only (default)"
+    echo "  24          Entire year (2024)"
+    echo "  12/24       Entire month (December 2024)"
+    echo "  12/07/25    Specific day"
+    echo ""
+    echo "Options:"
+    echo "  --parallel=N          Process N days concurrently (default: 12 for year, 8 for month)"
+    echo "  --upload-interval=N   Upload to storage every N days (default: 30 for year, 10 for month, 0 for day)"
+    echo "  --help, -h            Show this help"
+    echo ""
+    echo "Examples:"
+    echo "  $0                              # Daily cron - fetch today, upload once"
+    echo "  $0 24 --parallel=8              # Backfill 2024, upload every 30 days"
+    echo "  $0 11/24 --upload-interval=5    # Backfill November, upload every 5 days"
+    echo ""
+    exit 0
+fi
+
+# ============================================================================
+# Determine Run Mode and Defaults
+# ============================================================================
+# Detect mode from DATE_RANGE format: YY = year, MM/YY = month, MM/DD/YY = day
+RUN_MODE="day"
+if [[ -n "$DATE_RANGE" ]]; then
+    SLASH_COUNT=$(echo "$DATE_RANGE" | tr -cd '/' | wc -c)
+    if [[ "$SLASH_COUNT" -eq 0 ]]; then
+        RUN_MODE="year"
+    elif [[ "$SLASH_COUNT" -eq 1 ]]; then
+        RUN_MODE="month"
+    else
+        RUN_MODE="day"
+    fi
+fi
+
+# Set default upload interval based on mode
+if [[ -z "$UPLOAD_INTERVAL" ]]; then
+    case "$RUN_MODE" in
+        year)  UPLOAD_INTERVAL=30 ;;
+        month) UPLOAD_INTERVAL=10 ;;
+        day)   UPLOAD_INTERVAL=0 ;;  # 0 = disabled, upload only at end
+    esac
+fi
+
+# ============================================================================
 # Lock File (prevent overlapping runs)
 # ============================================================================
 LOCK_FILE="$DEPLOY_DIR/logs/.update.lock"
 mkdir -p "$DEPLOY_DIR/logs"
 
 cleanup() {
+    # Kill fetch process if still running
+    if [[ -n "${FETCH_PID:-}" ]] && kill -0 "$FETCH_PID" 2>/dev/null; then
+        log "⚠️ Stopping fetch process (PID $FETCH_PID)..."
+        kill "$FETCH_PID" 2>/dev/null || true
+    fi
     rm -f "$LOCK_FILE"
 }
 trap cleanup EXIT
@@ -56,9 +152,9 @@ else
 fi
 
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_DIR/public/data}"
+INDEX_FILE="$OUTPUT_DIR/index.json"
 
 # Storage configuration
-STORAGE_ORDER="${STORAGE_ORDER:-r2,do}"
 R2_ENABLED="${R2_ENABLED:-true}"
 DO_ENABLED="${DO_ENABLED:-false}"
 
@@ -66,104 +162,153 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# Get count of dates in index.json
+get_date_count() {
+    if [[ -f "$INDEX_FILE" ]]; then
+        # Count dates array length using grep (works without jq)
+        grep -o '"[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}"' "$INDEX_FILE" 2>/dev/null | wc -l || echo 0
+    else
+        echo 0
+    fi
+}
+
+# Run storage uploads (R2 and DO in parallel)
+run_uploads() {
+    local label="$1"
+    
+    if [[ "$R2_ENABLED" != "true" ]] && [[ "$DO_ENABLED" != "true" ]]; then
+        return 0
+    fi
+    
+    log "🚀 $label..."
+    local UPLOAD_START=$(date +%s)
+    local R2_PID="" DO_PID=""
+    
+    if [[ "$R2_ENABLED" == "true" ]]; then
+        "$SCRIPT_DIR/upload-r2.sh" "$OUTPUT_DIR" &
+        R2_PID=$!
+    fi
+    
+    if [[ "$DO_ENABLED" == "true" ]]; then
+        "$SCRIPT_DIR/upload-do.sh" "$OUTPUT_DIR" &
+        DO_PID=$!
+    fi
+    
+    # Wait for uploads
+    local SUCCESS=false
+    if [[ -n "$R2_PID" ]]; then
+        if wait "$R2_PID" 2>/dev/null; then
+            SUCCESS=true
+        fi
+    fi
+    if [[ -n "$DO_PID" ]]; then
+        if wait "$DO_PID" 2>/dev/null; then
+            SUCCESS=true
+        fi
+    fi
+    
+    local DURATION=$(($(date +%s) - UPLOAD_START))
+    local TIME=$(printf '%dm%02ds' $((DURATION/60)) $((DURATION%60)))
+    
+    if [[ "$SUCCESS" == "true" ]]; then
+        log "   ✓ Upload completed ($TIME)"
+    else
+        log "   ⚠ Upload failed ($TIME)"
+    fi
+}
+
 log "════════════════════════════════════════════════════════════════"
 log "  RouteFluxMap Data Update"
 log "════════════════════════════════════════════════════════════════"
 log ""
-log "  Storage order: $STORAGE_ORDER"
-log "  Output dir:    $OUTPUT_DIR"
+log "  Mode:            $RUN_MODE"
+log "  Date range:      ${DATE_RANGE:-current day}"
+log "  Upload interval: ${UPLOAD_INTERVAL} days (0=end only)"
+log "  Output dir:      $OUTPUT_DIR"
+log "  R2 enabled:      $R2_ENABLED"
+log "  DO enabled:      $DO_ENABLED"
 log ""
 
 # Step 1: Verify dependencies
 if ! command -v node &>/dev/null; then
     log "❌ Node.js not found in PATH"
-    log "   PATH=$PATH"
-    log "   Ensure Node.js is installed and accessible"
-    exit 1
-fi
-
-if ! command -v npx &>/dev/null; then
-    log "❌ npx not found in PATH"
     exit 1
 fi
 
 log "📦 Using Node.js $(node --version)"
 
-# Step 2: Fetch all data (relay data + country data + geolocation)
-log "📡 Fetching Tor network data..."
+# Step 2: Build fetch command
 cd "$PROJECT_DIR"
+FETCH_OPTS=""
+[[ -n "$DATE_RANGE" ]] && FETCH_OPTS="$FETCH_OPTS $DATE_RANGE"
+[[ -n "$PARALLEL" ]] && FETCH_OPTS="$FETCH_OPTS --parallel=$PARALLEL"
 
-if npx tsx scripts/fetch-all-data.ts; then
-    log "✅ Data fetch completed"
-else
-    log "❌ Data fetch failed"
-    exit 1
-fi
+# ============================================================================
+# Step 3: Fetch with Incremental Uploads
+# ============================================================================
 
-# Step 3: Upload to storage backends (parallel)
-if [[ "$R2_ENABLED" != "true" ]] && [[ "$DO_ENABLED" != "true" ]]; then
-    log "⚠️ No storage backends enabled (R2_ENABLED=$R2_ENABLED, DO_ENABLED=$DO_ENABLED)"
-    log "   Data fetched successfully but not uploaded"
-    log "   Set R2_ENABLED=true and/or DO_ENABLED=true in config.env"
-    exit 0
-fi
-
-R2_PID=""
-DO_PID=""
-
-UPLOAD_START=$(date +%s)
-
-if [[ "$R2_ENABLED" == "true" ]]; then
-    log "🚀 Starting R2 upload..."
-    stdbuf -oL "$SCRIPT_DIR/upload-r2.sh" "$OUTPUT_DIR" &
-    R2_PID=$!
-fi
-
-if [[ "$DO_ENABLED" == "true" ]]; then
-    log "🚀 Starting DO Spaces upload..."
-    stdbuf -oL "$SCRIPT_DIR/upload-do.sh" "$OUTPUT_DIR" &
-    DO_PID=$!
-fi
-
-# Wait for uploads to complete
-UPLOAD_SUCCESS=false
-
-if [[ -n "$R2_PID" ]]; then
-    R2_EXIT=0
-    wait "$R2_PID" || R2_EXIT=$?
-    R2_DURATION=$(($(date +%s) - UPLOAD_START))
-    R2_TIME=$(printf '%dm%02ds' $((R2_DURATION/60)) $((R2_DURATION%60)))
-    if [[ "$R2_EXIT" == "0" ]]; then
-        log "✅ R2 upload completed ($R2_TIME)"
-        UPLOAD_SUCCESS=true
+if [[ "$UPLOAD_INTERVAL" -eq 0 ]]; then
+    # Simple mode: fetch, then upload once at end
+    log "📡 Fetching data..."
+    
+    if npx tsx scripts/fetch-all-data.ts $FETCH_OPTS; then
+        log "✅ Data fetch completed"
     else
-        log "⚠️ R2 upload failed (exit $R2_EXIT, $R2_TIME)"
+        log "❌ Data fetch failed"
+        exit 1
     fi
-fi
-
-if [[ -n "$DO_PID" ]]; then
-    DO_EXIT=0
-    wait "$DO_PID" || DO_EXIT=$?
-    DO_DURATION=$(($(date +%s) - UPLOAD_START))
-    DO_TIME=$(printf '%dm%02ds' $((DO_DURATION/60)) $((DO_DURATION%60)))
-    if [[ "$DO_EXIT" == "0" ]]; then
-        log "✅ DO Spaces upload completed ($DO_TIME)"
-        UPLOAD_SUCCESS=true
-    else
-        log "⚠️ DO Spaces upload failed (exit $DO_EXIT, $DO_TIME)"
-    fi
-fi
-
-# Check if at least one upload succeeded
-if [[ "$UPLOAD_SUCCESS" == "true" ]]; then
-    log "✅ Storage uploads completed"
+    
+    run_uploads "Uploading to storage"
 else
-    log "❌ All uploads failed"
-    exit 1
+    # Incremental mode: fetch in background, upload periodically
+    log "📡 Starting data fetch (background)..."
+    
+    INITIAL_COUNT=$(get_date_count)
+    LAST_UPLOAD_COUNT=$INITIAL_COUNT
+    
+    # Start fetch in background
+    npx tsx scripts/fetch-all-data.ts $FETCH_OPTS &
+    FETCH_PID=$!
+    
+    log "   Fetch PID: $FETCH_PID"
+    log "   Initial date count: $INITIAL_COUNT"
+    log "   Will upload every $UPLOAD_INTERVAL new days"
+    log ""
+    
+    # Monitor and upload periodically
+    while kill -0 "$FETCH_PID" 2>/dev/null; do
+        sleep 10  # Check every 10 seconds
+        
+        CURRENT_COUNT=$(get_date_count)
+        NEW_DAYS=$((CURRENT_COUNT - LAST_UPLOAD_COUNT))
+        
+        if [[ "$NEW_DAYS" -ge "$UPLOAD_INTERVAL" ]]; then
+            log "📊 Progress: $CURRENT_COUNT dates (+$NEW_DAYS since last upload)"
+            run_uploads "Incremental upload"
+            LAST_UPLOAD_COUNT=$CURRENT_COUNT
+        fi
+    done
+    
+    # Check fetch exit status
+    FETCH_EXIT=0
+    wait "$FETCH_PID" || FETCH_EXIT=$?
+    FETCH_PID=""
+    
+    if [[ "$FETCH_EXIT" -eq 0 ]]; then
+        log "✅ Data fetch completed"
+    else
+        log "❌ Data fetch failed (exit $FETCH_EXIT)"
+        exit 1
+    fi
+    
+    # Final upload (catches any remaining files)
+    FINAL_COUNT=$(get_date_count)
+    TOTAL_NEW=$((FINAL_COUNT - INITIAL_COUNT))
+    log "📊 Final: $FINAL_COUNT dates ($TOTAL_NEW new)"
+    run_uploads "Final upload"
 fi
 
 log ""
 log "════════════════════════════════════════════════════════════════"
 log "  ✅ Update complete!"
 log "════════════════════════════════════════════════════════════════"
-

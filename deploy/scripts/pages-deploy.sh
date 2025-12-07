@@ -2,7 +2,7 @@
 # RouteFluxMap - Cloudflare Pages Deploy Script
 # ==============================================
 # Builds the static site and deploys to Cloudflare Pages via Wrangler.
-# Similar to allium-deploy pattern - full local control over builds.
+# Uses Pages Functions to proxy /data/* requests to R2 (native) or DO Spaces (HTTP).
 #
 # Usage:
 #   ./deploy/scripts/pages-deploy.sh           # Build and deploy
@@ -77,62 +77,97 @@ CF_PAGES_PROJECT="${CF_PAGES_PROJECT:-routefluxmap}"
 CF_PAGES_BRANCH="${CF_PAGES_BRANCH:-main}"
 PUBLIC_SITE_URL="${PUBLIC_SITE_URL:-}"
 PUBLIC_METRICS_URL="${PUBLIC_METRICS_URL:-}"
-
-# Build data URLs from storage config
-get_storage_url() {
-    local storage="$1"
-    case "$storage" in
-        do)
-            if [[ -n "${DO_SPACES_CUSTOM_DOMAIN:-}" ]]; then
-                echo "https://${DO_SPACES_CUSTOM_DOMAIN}"
-            elif [[ "${DO_SPACES_CDN:-false}" == "true" ]]; then
-                echo "https://${DO_SPACES_BUCKET}.${DO_SPACES_REGION}.cdn.digitaloceanspaces.com"
-            else
-                echo "https://${DO_SPACES_BUCKET}.${DO_SPACES_REGION}.digitaloceanspaces.com"
-            fi
-            ;;
-        r2)
-            if [[ -n "${R2_CUSTOM_DOMAIN:-}" ]]; then
-                echo "https://${R2_CUSTOM_DOMAIN}"
-            else
-                # R2 requires custom domain for public access
-                error "R2_CUSTOM_DOMAIN must be set for R2 public access"
-                exit 1
-            fi
-            ;;
-        *)
-            error "Unknown storage: $storage"
-            exit 1
-            ;;
-    esac
-}
-
-# Parse STORAGE_ORDER to get primary and fallback
 STORAGE_ORDER="${STORAGE_ORDER:-do,r2}"
-IFS=',' read -ra STORAGE_ARRAY <<< "$STORAGE_ORDER"
-PRIMARY_STORAGE="${STORAGE_ARRAY[0]}"
-FALLBACK_STORAGE="${STORAGE_ARRAY[1]:-}"
 
-PUBLIC_DATA_URL=$(get_storage_url "$PRIMARY_STORAGE")
-if [[ -n "$FALLBACK_STORAGE" ]]; then
-    PUBLIC_DATA_URL_FALLBACK=$(get_storage_url "$FALLBACK_STORAGE")
+# === Generate wrangler.toml from template ===
+
+TEMPLATE_FILE="$PROJECT_DIR/wrangler.toml.template"
+WRANGLER_FILE="$PROJECT_DIR/wrangler.toml"
+
+if [[ -f "$TEMPLATE_FILE" ]]; then
+    log "Generating wrangler.toml from template..."
+    
+    # Build R2 bucket section
+    R2_BUCKET_SECTION=""
+    if [[ "${R2_ENABLED:-false}" == "true" ]] && [[ -n "${R2_BUCKET:-}" ]]; then
+        R2_BUCKET_SECTION="[[r2_buckets]]
+binding = \"DATA_BUCKET\"
+bucket_name = \"${R2_BUCKET}\""
+    else
+        R2_BUCKET_SECTION="# R2 disabled (R2_ENABLED=false or R2_BUCKET not set)"
+    fi
+    
+    # Build DO Spaces URL var
+    DO_SPACES_URL_VAR=""
+    if [[ "${DO_ENABLED:-false}" == "true" ]]; then
+        if [[ -n "${DO_SPACES_CUSTOM_DOMAIN:-}" ]]; then
+            DO_SPACES_URL="https://${DO_SPACES_CUSTOM_DOMAIN}"
+        elif [[ "${DO_SPACES_CDN:-false}" == "true" ]]; then
+            DO_SPACES_URL="https://${DO_SPACES_BUCKET}.${DO_SPACES_REGION}.cdn.digitaloceanspaces.com"
+        else
+            DO_SPACES_URL="https://${DO_SPACES_BUCKET}.${DO_SPACES_REGION}.digitaloceanspaces.com"
+        fi
+        DO_SPACES_URL_VAR="DO_SPACES_URL = \"${DO_SPACES_URL}\""
+    else
+        DO_SPACES_URL_VAR="# DO_SPACES_URL not configured (DO_ENABLED=false)"
+    fi
+    
+    # Generate wrangler.toml
+    sed -e "s|{{CF_PAGES_PROJECT}}|${CF_PAGES_PROJECT}|g" \
+        -e "s|{{STORAGE_ORDER}}|${STORAGE_ORDER}|g" \
+        "$TEMPLATE_FILE" > "$WRANGLER_FILE.tmp"
+    
+    # Replace multi-line sections
+    awk -v r2_section="$R2_BUCKET_SECTION" -v do_section="$DO_SPACES_URL_VAR" '
+        /\{\{R2_BUCKET_SECTION\}\}/ { print r2_section; next }
+        /\{\{DO_SPACES_URL_VAR\}\}/ { print do_section; next }
+        { print }
+    ' "$WRANGLER_FILE.tmp" > "$WRANGLER_FILE"
+    rm -f "$WRANGLER_FILE.tmp"
+    
+    success "Generated wrangler.toml"
 else
-    PUBLIC_DATA_URL_FALLBACK=""
+    warn "wrangler.toml.template not found, skipping generation"
 fi
+
+# Data is served via Pages Function at /data/*
+# Frontend fetches from relative URL /data/
+PUBLIC_DATA_URL="/data"
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║  RouteFluxMap - Cloudflare Pages Deploy                       ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
-log "Project:   $CF_PAGES_PROJECT"
-log "Branch:    $CF_PAGES_BRANCH"
-log "Storage:   $STORAGE_ORDER (${PRIMARY_STORAGE} primary)"
-log "Data URL:  $PUBLIC_DATA_URL"
-if [[ -n "$PUBLIC_DATA_URL_FALLBACK" ]]; then
-    log "Fallback:  $PUBLIC_DATA_URL_FALLBACK"
-fi
-log "Dry run:   $DRY_RUN"
+log "Project:      $CF_PAGES_PROJECT"
+log "Branch:       $CF_PAGES_BRANCH"
+log "Storage:      $STORAGE_ORDER"
+log "Data URL:     $PUBLIC_DATA_URL (via Pages Function)"
+log "Dry run:      $DRY_RUN"
+echo ""
+
+# Display storage backends
+log "Storage Backends:"
+IFS=',' read -ra STORAGE_ARRAY <<< "$STORAGE_ORDER"
+for backend in "${STORAGE_ARRAY[@]}"; do
+    backend=$(echo "$backend" | tr -d ' ')
+    case "$backend" in
+        do)
+            if [[ "${DO_ENABLED:-false}" == "true" ]]; then
+                echo "   • DO Spaces: ✅ ${DO_SPACES_BUCKET}.${DO_SPACES_REGION}.digitaloceanspaces.com"
+            else
+                echo "   • DO Spaces: ⚠️  In order but DO_ENABLED=false"
+            fi
+            ;;
+        r2)
+            if [[ "${R2_ENABLED:-false}" == "true" ]]; then
+                echo "   • R2:        ✅ ${R2_BUCKET} (native binding)"
+            else
+                echo "   • R2:        ⚠️  In order but R2_ENABLED=false"
+            fi
+            ;;
+    esac
+done
 echo ""
 
 cd "$PROJECT_DIR"
@@ -143,7 +178,6 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
     
     # Set environment variables for build (PUBLIC_* are baked into static site)
     export PUBLIC_DATA_URL
-    export PUBLIC_DATA_URL_FALLBACK
     export PUBLIC_SITE_URL
     export PUBLIC_METRICS_URL
     
@@ -161,6 +195,12 @@ else
     fi
 fi
 
+# Remove data from dist (data is served via Pages Function from R2/DO, not from dist)
+if [[ -d "$PROJECT_DIR/dist/data" ]]; then
+    rm -rf "$PROJECT_DIR/dist/data"
+    success "Removed dist/data (data served from R2/DO via Pages Function)"
+fi
+
 # Step 2: Copy custom files to dist/
 log "Adding custom routing files..."
 
@@ -170,16 +210,11 @@ if [[ -f "$DEPLOY_DIR/pages/_headers" ]]; then
     success "Added _headers"
 fi
 
-# Copy _redirects if exists
+# Copy _redirects if exists (but we don't need data proxy anymore - Pages Function handles it)
 if [[ -f "$DEPLOY_DIR/pages/_redirects" ]]; then
-    cp "$DEPLOY_DIR/pages/_redirects" "$PROJECT_DIR/dist/_redirects"
+    # Filter out any /data/* redirects since Pages Function handles that now
+    grep -v "^/data/\*" "$DEPLOY_DIR/pages/_redirects" > "$PROJECT_DIR/dist/_redirects" 2>/dev/null || true
     success "Added _redirects"
-fi
-
-# Generate _redirects from template if ENABLE_DATA_PROXY is true
-if [[ "${ENABLE_DATA_PROXY:-false}" == "true" ]] && [[ -n "${PUBLIC_DATA_URL:-}" ]]; then
-    echo "/data/* ${PUBLIC_DATA_URL}/:splat 200" >> "$PROJECT_DIR/dist/_redirects"
-    success "Added data proxy redirect"
 fi
 
 # Step 3: Show what will be deployed
@@ -209,7 +244,7 @@ echo ""
 export CLOUDFLARE_API_TOKEN
 export CLOUDFLARE_ACCOUNT_ID
 
-# Deploy using wrangler
+# Deploy using wrangler (includes functions/ directory automatically)
 if npx wrangler pages deploy "$PROJECT_DIR/dist" \
     --project-name="$CF_PAGES_PROJECT" \
     --branch="$CF_PAGES_BRANCH"; then
@@ -220,6 +255,9 @@ if npx wrangler pages deploy "$PROJECT_DIR/dist" \
     if [[ -n "${CUSTOM_DOMAIN:-}" ]]; then
         echo "  Custom:   https://$CUSTOM_DOMAIN"
     fi
+    echo ""
+    echo "  Data is served via Pages Function at /data/*"
+    echo "  Check X-Served-From header to see which backend served a request"
 else
     error "Deployment failed"
     exit 1
@@ -229,4 +267,3 @@ echo ""
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║  ✓ Deploy Complete                                            ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
-
