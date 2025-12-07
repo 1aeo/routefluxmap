@@ -17,9 +17,9 @@
     "fetch-historical": "tsx scripts/fetch-historical-data.ts",
     "convert-csv": "tsx scripts/convert-csv-to-json.ts",
     "upload": "tsx scripts/upload-to-storage.ts",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest --coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "prepare": "husky"
   },
   "keywords": [
