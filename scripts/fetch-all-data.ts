@@ -203,7 +203,12 @@ const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
 // Global State
 // ============================================================================
 
+type GeoLiteLookup = {
+  lookup(ip: string): { ll?: [number, number] } | null;
+};
+
 let geoReader: any = null;
+let geoipLite: GeoLiteLookup | null = null;
 
 const status = {
   relayFiles: 0,
@@ -311,14 +316,52 @@ function getCountryCoords(countryCode?: string): { lat: number; lng: number } {
 }
 
 function geolocateIP(ip: string): { lat: number; lng: number } | null {
-  if (!geoReader) return null;
-  try {
-    const r = geoReader.get(ip);
-    if (r?.location) {
-      return { lat: r.location.latitude, lng: r.location.longitude };
-    }
-  } catch {}
+  if (geoReader) {
+    try {
+      const r = geoReader.get(ip);
+      if (r?.location) {
+        return { lat: r.location.latitude, lng: r.location.longitude };
+      }
+    } catch {}
+  } else if (geoipLite) {
+    try {
+      const lookup = geoipLite.lookup(ip);
+      if (lookup?.ll) {
+        const [lat, lng] = lookup.ll;
+        return { lat, lng };
+      }
+    } catch {}
+  }
   return null;
+}
+
+async function initializeGeoIP(): Promise<void> {
+  if (fs.existsSync(GEOIP_DB_PATH)) {
+    try {
+      const maxmind = await import('maxmind');
+      geoReader = await maxmind.open(GEOIP_DB_PATH);
+      console.log('  ✓ MaxMind database loaded');
+      return;
+    } catch (e: any) {
+      console.log(`  ⚠ Failed to load MaxMind database: ${e.message}`);
+    }
+  } else {
+    console.log(`  ⚠ MaxMind DB not found at ${GEOIP_DB_PATH}`);
+  }
+  
+  try {
+    const geoipModule: any = await import('geoip-lite');
+    const fallback = geoipModule?.default || geoipModule;
+    if (fallback && typeof fallback.lookup === 'function') {
+      geoipLite = fallback as GeoLiteLookup;
+      console.log('  ✓ geoip-lite fallback loaded');
+      return;
+    }
+  } catch (e: any) {
+    console.log(`  ⚠ geoip-lite fallback unavailable: ${e.message}`);
+  }
+  
+  console.log('  ⚠ GeoIP lookup unavailable, using country centroids');
 }
 
 // ============================================================================
@@ -578,7 +621,7 @@ function downloadFile(url: string, dest: string): Promise<void> {
 
 async function verifyArchive(archivePath: string): Promise<boolean> {
   try {
-    await execAsync(`xz -t "${archivePath}"`, { timeout: 30000 });
+    await execAsync(`xz -t "${archivePath}"`, { timeout: 120000 });
     return true;
   } catch {
     return false;
@@ -856,6 +899,70 @@ function parseConsensus(text: string): { nickname: string; fingerprint: string; 
   return relays;
 }
 
+function findConsensusFileInDir(dirPath: string, targetPrefix: string): string | null {
+  if (!fs.existsSync(dirPath)) return null;
+  const files = fs.readdirSync(dirPath)
+    .filter(file => file.startsWith(targetPrefix))
+    .sort();
+  if (files.length === 0) return null;
+  return path.join(dirPath, files[0]);
+}
+
+function searchConsensusRecursively(dirPath: string, targetPrefix: string, depth: number = 0): string | null {
+  if (!fs.existsSync(dirPath)) return null;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        const nested = searchConsensusRecursively(fullPath, targetPrefix, depth + 1);
+        if (nested) return nested;
+      } else if (entry.isFile() && entry.name.startsWith(targetPrefix)) {
+        return fullPath;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function resolveConsensusFile(extractedDir: string, dateStr: string): string | null {
+  const [,, dayRaw] = dateStr.split('-');
+  const dayStr = dayRaw?.padStart(2, '0') || '01';
+  const targetPrefix = `${dateStr}-`;
+  const triedDirs = new Set<string>();
+  
+  const addCandidate = (offset: number) => {
+    const numericDay = parseInt(dayStr, 10) + offset;
+    if (numericDay >= 1 && numericDay <= 31) {
+      triedDirs.add(String(numericDay).padStart(2, '0'));
+    }
+  };
+  
+  addCandidate(0);
+  for (const offset of [1, -1, 2, -2]) {
+    addCandidate(offset);
+  }
+  
+  for (const dir of triedDirs) {
+    const match = findConsensusFileInDir(path.join(extractedDir, dir), targetPrefix);
+    if (match) return match;
+  }
+  
+  try {
+    const entries = fs.readdirSync(extractedDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const match = findConsensusFileInDir(path.join(extractedDir, entry.name), targetPrefix);
+      if (match) return match;
+    }
+  } catch {}
+  
+  const recursiveMatch = searchConsensusRecursively(extractedDir, targetPrefix);
+  if (recursiveMatch) return recursiveMatch;
+  
+  return null;
+}
+
 async function fetchCollectorRelays(dateStr: string): Promise<ProcessedRelayData | null> {
   return fetchCollectorRelaysWithTiming(dateStr, []);
 }
@@ -875,38 +982,10 @@ async function fetchCollectorRelaysWithTiming(dateStr: string, steps: StepTiming
   const bandwidthMap = await loadDescriptorBandwidth(year, month);
   steps.push({ step: 'descriptor-load', durationMs: Date.now() - descStart });
   
-  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-  const dayStr = String(day).padStart(2, '0');
-  
   try {
     // Find consensus file for this day (reading from extracted directory - very fast)
     const findStart = Date.now();
-    const dayDir = path.join(extractedDir, dayStr);
-    
-    let consensusFile: string | null = null;
-    
-    if (fs.existsSync(dayDir)) {
-      // Find the first consensus file for this day (e.g., 2025-11-15-00-00-00-consensus)
-      const files = fs.readdirSync(dayDir).filter(f => f.includes(`${monthStr}-${dayStr}-`));
-      if (files.length > 0) {
-        consensusFile = path.join(dayDir, files[0]);
-      }
-    }
-    
-    // If exact day not found, try adjacent days
-    if (!consensusFile) {
-      for (const offset of [1, -1, 2, -2]) {
-        const altDay = String(day + offset).padStart(2, '0');
-        const altDayDir = path.join(extractedDir, altDay);
-        if (fs.existsSync(altDayDir)) {
-          const files = fs.readdirSync(altDayDir).filter(f => f.includes(`${monthStr}-${altDay}-`));
-          if (files.length > 0) {
-            consensusFile = path.join(altDayDir, files[0]);
-            break;
-          }
-        }
-      }
-    }
+    const consensusFile = resolveConsensusFile(extractedDir, dateStr);
     steps.push({ step: 'consensus-find', durationMs: Date.now() - findStart });
     
     if (!consensusFile) {
@@ -1001,20 +1080,34 @@ function fetchCountryClientsOnce(date: string): Promise<CountryData> {
         
         const countries: { [code: string]: number } = {};
         let totalUsers = 0;
+        let hasAggregateRow = false;
+        let countrySum = 0;
         
         for (const line of lines) {
           const parts = line.split(',');
           if (parts.length < 3) continue;
           
-          const [, country, usersStr] = parts;
+          const [, countryRaw = '', usersStr] = parts;
           const users = parseInt(usersStr, 10);
-          if (!country || isNaN(users)) continue;
+          if (isNaN(users)) continue;
+
+          const country = countryRaw.trim();
           
           if (country === '') {
             totalUsers = users;
-          } else if (country !== '??') {
-            countries[country.toUpperCase()] = users;
+            hasAggregateRow = true;
+            continue;
           }
+
+          const normalized = country.toUpperCase();
+          if (normalized === '??' || normalized === '') continue;
+          
+          countries[normalized] = users;
+          countrySum += users;
+        }
+
+        if (!hasAggregateRow) {
+          totalUsers = countrySum;
         }
         
         resolve({
@@ -1327,21 +1420,9 @@ async function main() {
     if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
   });
   
-  // Load MaxMind
+  // Load GeoIP provider(s)
   console.log('\n━━━ Initialization ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-  
-  if (fs.existsSync(GEOIP_DB_PATH)) {
-    try {
-      const maxmind = await import('maxmind');
-      geoReader = await maxmind.open(GEOIP_DB_PATH);
-      console.log('  ✓ MaxMind database loaded');
-    } catch (e) {
-      console.log('  ⚠ MaxMind not available, using country centroids');
-    }
-  } else {
-    console.log(`  ⚠ MaxMind DB not found at ${GEOIP_DB_PATH}`);
-    console.log('    Using country centroids as fallback');
-  }
+  await initializeGeoIP();
   
   const startTime = Date.now();
   
