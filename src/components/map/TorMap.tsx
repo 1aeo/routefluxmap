@@ -10,6 +10,12 @@ import { Map } from 'react-map-gl/maplibre';
 import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
+import { parseUrlHash } from '../../lib/utils/url';
+import {
+  calculateNodeRadius,
+  calculateZoomScale,
+  getZoomPixelConstraints,
+} from '../../lib/utils/node-sizing';
 import RelayPopup from '../ui/RelayPopup';
 import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
@@ -29,20 +35,6 @@ const INITIAL_VIEW_STATE: MapViewState = {
   pitch: 0,
   bearing: 0,
 };
-
-// Parse URL hash for date parameter
-function parseUrlHash(): { date?: string } {
-  if (typeof window === 'undefined') return {};
-  const hash = window.location.hash.slice(1);
-  const params: Record<string, string> = {};
-  
-  hash.split('&').forEach(part => {
-    const [key, value] = part.split('=');
-    if (key && value) params[key] = decodeURIComponent(value);
-  });
-  
-  return params;
-}
 
 export default function TorMap({ dataUrl }: TorMapProps) {
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
@@ -319,16 +311,12 @@ export default function TorMap({ dataUrl }: TorMapProps) {
     if (relayData && layerVisibility.relays) {
       // Find max relay count for scaling
       const maxRelayCount = Math.max(...relayData.nodes.map(n => n.relays.length), 1);
+      const maxBandwidth = relayData.minMax.max;
       
-      // Calculate zoom-based scaling factor - gentle scaling
+      // Use extracted utility functions for zoom-based calculations
       const zoom = viewState.zoom;
-      // At zoom 3, scale = 1. At zoom 10, scale = ~4 (was ~10)
-      const zoomScale = Math.pow(1.2, zoom - 3);
-      
-      // Calculate min/max based on zoom - more granularity at higher zooms
-      // At zoom 1-2: min 2, max 15 (reduced max to avoid clutter)
-      const baseMinPixels = zoom < 4 ? 2 : zoom < 6 ? 3 : 4;
-      const baseMaxPixels = zoom < 3 ? 15 : zoom < 4 ? 20 : zoom < 6 ? 30 : 50;
+      const zoomScale = calculateZoomScale(zoom);
+      const { baseMinPixels, baseMaxPixels } = getZoomPixelConstraints(zoom);
       
       result.push(
         new ScatterplotLayer({
@@ -343,35 +331,8 @@ export default function TorMap({ dataUrl }: TorMapProps) {
           radiusMaxPixels: baseMaxPixels,
           lineWidthMinPixels: 1,
           getPosition: (d: AggregatedNode) => [d.lng, d.lat],
-          getRadius: (d: AggregatedNode) => {
-            // Scale primarily by relay count (cluster density)
-            const minRadius = config.nodeRadius.min;
-            const maxRadius = config.nodeRadius.max;
-            
-            // Use log scale for relay count to handle large differences
-            // More aggressive scaling for clusters
-            const relayCount = d.relays.length;
-            const countNormalized = Math.log(1 + relayCount * 2) / Math.log(1 + maxRelayCount * 2);
-            
-            // Also factor in bandwidth (secondary)
-            const bwNormalized = d.bandwidth / (relayData.minMax.max || 1);
-            
-            // Combine: count (density) vs bandwidth
-            // At lower zooms, emphasize count more to show "major hubs"
-            const zoomFactor = Math.max(0, 1 - (zoom - 1) / 4); // 1.0 at zoom 1, 0.0 at zoom 5
-            const countWeight = 0.8 + zoomFactor * 0.15; // 0.95 at zoom 1, 0.8 at zoom 5
-            const bwWeight = 1 - countWeight;
-            
-            const combined = countNormalized * countWeight + Math.sqrt(bwNormalized) * bwWeight;
-            
-            // Apply non-linear scaling for better visual differentiation
-            // Exponent: higher = smaller dots for low values
-            // At zoom 1-2, we want high differentiation
-            const exponent = zoom < 3 ? 0.9 : 0.7;
-            const radius = minRadius + (maxRadius - minRadius) * Math.pow(combined, exponent);
-            
-            return radius;
-          },
+          getRadius: (d: AggregatedNode) =>
+            calculateNodeRadius(d, zoom, maxRelayCount, maxBandwidth),
           getFillColor: (d: AggregatedNode) => {
             // Color by relay type: Exit (orange) > Guard (deep green) > Middle (mint green)
             const hasExit = d.relays.some(r => r.flags.includes('E'));
