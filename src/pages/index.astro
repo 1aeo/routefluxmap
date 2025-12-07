@@ -3,14 +3,14 @@ import Layout from '../layouts/Layout.astro';
 import TorMap from '../components/map/TorMap';
 import { config } from '../lib/config';
 
-const dataUrl = import.meta.env.PUBLIC_DATA_URL || config.dataBaseUrl;
 const metricsUrl = config.metricsUrl;
 ---
 
 <Layout title="RouteFluxMap - Tor Network Visualization">
   <main class="relative h-screen w-screen bg-tor-darker">
     <!-- Map Component (React Island) - handles its own UI including header/controls -->
-    <TorMap client:load dataUrl={dataUrl} />
+    <!-- Data URLs configured via PUBLIC_DATA_URL and PUBLIC_DATA_URL_FALLBACK env vars -->
+    <TorMap client:load />
 
     <!-- Info Button -->
     <button 

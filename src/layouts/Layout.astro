@@ -11,7 +11,7 @@ const {
   image = '/sample.png'
 } = Astro.props;
 
-const siteUrl = 'https://routefluxmap.1aeo.com';
+const siteUrl = import.meta.env.PUBLIC_SITE_URL || '';
 ---
 
 <!doctype html>

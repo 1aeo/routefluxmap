@@ -20,7 +20,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "prepare": "husky"
+    "prepare": "husky",
+    "deploy:pages": "./deploy/scripts/pages-deploy.sh",
+    "deploy:pages:dry": "./deploy/scripts/pages-deploy.sh --dry-run"
   },
   "keywords": [
     "tor",
@@ -58,6 +60,7 @@
     "jsdom": "^24.0.0",
     "maxmind": "^4.3.0",
     "tsx": "^4.19.0",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "wrangler": "^3.0.0"
   }
 }

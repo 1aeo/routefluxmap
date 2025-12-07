@@ -11,6 +11,7 @@ import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
 import { parseUrlHash } from '../../lib/utils/url';
+import { fetchWithFallback } from '../../lib/utils/data-fetch';
 import {
   calculateNodeRadius,
   calculateZoomScale,
@@ -24,10 +25,6 @@ import { useParticleLayer } from './ParticleOverlay';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 
-interface TorMapProps {
-  dataUrl: string;
-}
-
 const INITIAL_VIEW_STATE: MapViewState = {
   longitude: -40,
   latitude: 30,
@@ -36,7 +33,7 @@ const INITIAL_VIEW_STATE: MapViewState = {
   bearing: 0,
 };
 
-export default function TorMap({ dataUrl }: TorMapProps) {
+export default function TorMap() {
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [relayData, setRelayData] = useState<RelayData | null>(null);
   const [dateIndex, setDateIndex] = useState<DateIndex | null>(null);
@@ -84,22 +81,14 @@ export default function TorMap({ dataUrl }: TorMapProps) {
   const [countryGeojson, setCountryGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [countryHover, setCountryHover] = useState<{ code: string; x: number; y: number } | null>(null);
 
-  // Fetch date index
+  // Fetch date index (with primary/fallback support)
   useEffect(() => {
     async function fetchIndex() {
       try {
-        // Try local first, then remote
-        let response;
-        try {
-          response = await fetch('/data/index.json');
-          if (!response.ok) throw new Error('Local not found');
-        } catch {
-          response = await fetch(`${dataUrl}/index.json`);
+        const { data: index, source } = await fetchWithFallback<DateIndex>('index.json');
+        if (source === 'fallback') {
+          console.info('[TorMap] Using fallback data source for index');
         }
-
-        if (!response.ok) throw new Error('Failed to load index');
-        
-        const index: DateIndex = await response.json();
         setDateIndex(index);
         
         // Check URL hash for initial date
@@ -117,7 +106,7 @@ export default function TorMap({ dataUrl }: TorMapProps) {
     }
     
     fetchIndex();
-  }, [dataUrl]);
+  }, []);
 
   // Listen for URL hash changes
   useEffect(() => {
@@ -158,30 +147,18 @@ export default function TorMap({ dataUrl }: TorMapProps) {
     loadCountryGeoJson();
   }, []);
 
-  // Load real country client data from Tor Metrics
+  // Load real country client data from Tor Metrics (with primary/fallback support)
   useEffect(() => {
     if (!currentDate) return;
     
     async function loadCountryData() {
       try {
-        // Try to load pre-fetched country data for this date
-        let response;
-        try {
-          response = await fetch(`/data/countries-${currentDate}.json`);
-          if (!response.ok) throw new Error('Local not found');
-        } catch {
-          // Fallback to remote storage
-          response = await fetch(`${dataUrl}/countries-${currentDate}.json`);
+        const { data, source } = await fetchWithFallback<{ countries?: CountryHistogram }>(`countries-${currentDate}.json`);
+        if (source === 'fallback') {
+          console.info(`[TorMap] Using fallback for country data ${currentDate}`);
         }
-        
-        if (response.ok) {
-          const data = await response.json();
-          // data.countries is the CountryHistogram: { "US": 444507, "DE": 224891, ... }
-          setCountryData(data.countries || data);
-        } else {
-          // No country data available for this date, clear
-          setCountryData({});
-        }
+        // data.countries is the CountryHistogram: { "US": 444507, "DE": 224891, ... }
+        setCountryData(data.countries || data as CountryHistogram);
       } catch (err) {
         console.warn('Could not load country data:', err);
         setCountryData({});
@@ -189,28 +166,28 @@ export default function TorMap({ dataUrl }: TorMapProps) {
     }
     
     loadCountryData();
-  }, [currentDate, dataUrl]);
+  }, [currentDate]);
 
-  // Fetch relay data when date changes
+  // Fetch relay data when date changes (with primary/fallback support)
   useEffect(() => {
     if (!currentDate) return;
 
     async function fetchRelays() {
       setLoading(true);
       try {
-        // Try local first, then remote
-        let response;
+        // Try flat structure first, then current/ subdirectory
+        let result;
         try {
-          response = await fetch(`/data/relays-${currentDate}.json`);
-          if (!response.ok) throw new Error('Local not found');
+          result = await fetchWithFallback<RelayData>(`relays-${currentDate}.json`);
         } catch {
-          response = await fetch(`${dataUrl}/current/relays-${currentDate}.json`);
+          result = await fetchWithFallback<RelayData>(`current/relays-${currentDate}.json`);
         }
-
-        if (!response.ok) throw new Error('Failed to load relay data');
         
-        const data: RelayData = await response.json();
-        setRelayData(data);
+        if (result.source === 'fallback') {
+          console.info(`[TorMap] Using fallback for relay data ${currentDate}`);
+        }
+        
+        setRelayData(result.data);
         setError(null);
       } catch (err: any) {
         setError(err.message);
@@ -221,7 +198,7 @@ export default function TorMap({ dataUrl }: TorMapProps) {
     }
 
     fetchRelays();
-  }, [currentDate, dataUrl]);
+  }, [currentDate]);
 
   // Handle date change from slider
   const handleDateChange = useCallback((date: string) => {

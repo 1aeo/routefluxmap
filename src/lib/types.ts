@@ -5,7 +5,7 @@
 // Individual relay info (for popup display with metrics links)
 export interface RelayInfo {
   nickname: string;
-  fingerprint: string;         // For link to metrics.1aeo.com/relay/{fp}
+  fingerprint: string;         // For link to {metricsUrl}/relay/{fp}
   bandwidth: number;
   flags: string;               // M, G, E, H
   ip: string;

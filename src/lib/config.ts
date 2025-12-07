@@ -1,13 +1,13 @@
 /**
  * RouteFluxMap Configuration
- * Theme: 1aeo.com style (Black + Green)
+ * Theme: Black + Green
  */
 
 export const config = {
-  // Site info
-  siteUrl: 'https://routefluxmap.1aeo.com',
-  metricsUrl: 'https://metrics.1aeo.com',
-  dataBaseUrl: import.meta.env.PUBLIC_DATA_URL || 'https://data.routefluxmap.1aeo.com',
+  // Site info - configure via environment variables
+  siteUrl: import.meta.env.PUBLIC_SITE_URL || '',
+  metricsUrl: import.meta.env.PUBLIC_METRICS_URL || '',
+  dataBaseUrl: import.meta.env.PUBLIC_DATA_URL || '',
 
   // Color ramps - Green theme
   bandwidthColorRamp: ['#004d29', '#00ff88'] as const,

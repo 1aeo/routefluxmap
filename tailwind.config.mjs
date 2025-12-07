@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 1aeo.com theme: Black + Green
+        // Theme: Black + Green
         'tor-black': '#0a0a0a',
         'tor-darker': '#050505',
         'tor-green': '#00ff88',

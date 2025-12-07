@@ -61,14 +61,31 @@ pnpm preview
 
 ## 🔧 Configuration
 
-### Environment Variables
+All configuration is in `deploy/config.env`:
 
-Create a `.env` file for local development:
-
-```env
-# Data source URL (defaults to Cloudflare R2)
-PUBLIC_DATA_URL=https://data.routefluxmap.1aeo.com
+```bash
+cp deploy/config.env.template deploy/config.env
+nano deploy/config.env
 ```
+
+Key settings:
+
+```bash
+# Storage priority (first = primary for frontend, second = fallback)
+STORAGE_ORDER=do,r2
+
+# Site URLs
+PUBLIC_SITE_URL=https://your-site-url
+PUBLIC_METRICS_URL=https://your-metrics-url
+
+# Storage credentials
+DO_SPACES_BUCKET=your-bucket
+DO_SPACES_REGION=nyc3
+R2_BUCKET=your-bucket
+R2_CUSTOM_DOMAIN=data.yourdomain.com
+```
+
+The frontend automatically tries the primary storage first, then falls back to the secondary if primary fails.
 
 ## 📊 Data Pipeline
 
@@ -89,11 +106,33 @@ npm run fetch-data
 ./deploy/scripts/update.sh
 ```
 
-### Deployment Setup
+## 🚀 Deployment
+
+### Static Site (Cloudflare Pages)
+
+Deploy the frontend using the local Wrangler-based deploy (allium-deploy style):
+
+```bash
+# One-time setup (on deploy server)
+./deploy/scripts/pages-setup.sh
+
+# Edit credentials
+nano deploy/config.env
+
+# Deploy
+./deploy/scripts/pages-deploy.sh
+
+# Or via npm
+npm run deploy:pages
+```
+
+See [deploy/README.md](deploy/README.md) for detailed setup.
+
+### Setup Guides
 
 See [docs/setup/](docs/setup/) for detailed guides:
+- [Cloudflare Pages Deploy](docs/setup/cloudflare-pages-deploy.md) - Local Wrangler deploy
 - [MaxMind GeoIP](docs/setup/maxmind.md)
-- [Cloudflare Pages](docs/setup/cloudflare-pages.md)
 - [Cron Setup](docs/setup/cron.md)
 
 ## 🏗 Project Structure
@@ -111,11 +150,12 @@ routefluxmap/
 │   └── styles/          # Global CSS
 ├── public/              # Static assets
 ├── scripts/             # Data fetch scripts
-├── deploy/              # Deployment scripts (R2/Spaces upload)
-│   ├── scripts/         # Upload scripts (allium-deploy style)
-│   └── config.env       # Credentials (gitignored)
+├── deploy/              # All deployment (data + static site)
+│   ├── scripts/         # Data upload + Pages deploy scripts
+│   ├── pages/           # CF Pages _headers, _redirects
+│   └── config.env       # All credentials (gitignored)
 ├── docs/                # Documentation
-│   ├── setup/           # Setup guides (MaxMind, Cloudflare, Cron)
+│   ├── setup/           # Setup guides
 │   └── features/        # Feature specs
 └── tests/               # Unit tests
 ```

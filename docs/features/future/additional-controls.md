@@ -39,7 +39,7 @@ _map.on('zoomend', _updateMapLocUrl);
 
 ### URL Format
 ```
-https://routefluxmap.1aeo.com/#date=2024-12-01&ML=-40.5,30.2,4
+https://your-site/#date=2024-12-01&ML=-40.5,30.2,4
 ```
 
 ### RouteFluxMap Implementation
