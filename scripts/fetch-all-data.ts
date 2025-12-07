@@ -13,9 +13,19 @@
  * - index.json (date index with bandwidth stats)
  * 
  * Usage:
- *   npx tsx scripts/fetch-all-data.ts
- *   npx tsx scripts/fetch-all-data.ts --date=2024-01-15
+ *   npx tsx scripts/fetch-all-data.ts              # Current day / last 24 hours
+ *   npx tsx scripts/fetch-all-data.ts 12/07/25     # Specific day (mm/dd/yy)
+ *   npx tsx scripts/fetch-all-data.ts 12/25        # Entire month (mm/yy)
+ *   npx tsx scripts/fetch-all-data.ts 25           # Entire year (yy)
+ *   npx tsx scripts/fetch-all-data.ts --date=2024-01-15  # Legacy format
  */
+
+// ============================================================================
+// Version Information
+// ============================================================================
+
+const SCRIPT_VERSION = '3.0.0';
+const DATA_FORMAT_VERSION = '2.0';
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -60,6 +70,11 @@ interface AggregatedNode {
 }
 
 interface ProcessedRelayData {
+  version: {
+    script: string;
+    dataFormat: string;
+    generatedAt: string;
+  };
   published: string;
   nodes: AggregatedNode[];
   bandwidth: number;
@@ -67,12 +82,21 @@ interface ProcessedRelayData {
 }
 
 interface CountryData {
+  version: {
+    script: string;
+    dataFormat: string;
+    generatedAt: string;
+  };
   date: string;
   totalUsers: number;
   countries: { [code: string]: number };
 }
 
 interface DateIndex {
+  version: {
+    script: string;
+    dataFormat: string;
+  };
   lastUpdated: string;
   dates: string[];
   bandwidths: number[];
@@ -285,7 +309,16 @@ function fetchCountryClients(date: string): Promise<CountryData> {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         console.log(`  ✓ Country data received (${elapsed}s, ${Object.keys(countries).length} countries)`);
         
-        resolve({ date, totalUsers, countries });
+        resolve({
+          version: {
+            script: SCRIPT_VERSION,
+            dataFormat: DATA_FORMAT_VERSION,
+            generatedAt: new Date().toISOString(),
+          },
+          date,
+          totalUsers,
+          countries,
+        });
       });
     }).on('error', reject);
   });
@@ -417,6 +450,11 @@ async function processRelays(data: OnionooResponse): Promise<ProcessedRelayData>
   nodes.sort((a, b) => b.bandwidth - a.bandwidth);
   
   return {
+    version: {
+      script: SCRIPT_VERSION,
+      dataFormat: DATA_FORMAT_VERSION,
+      generatedAt: new Date().toISOString(),
+    },
     published: data.relays_published,
     nodes,
     bandwidth: totalBandwidth,
@@ -434,8 +472,17 @@ function updateIndex(dateStr: string, totalBandwidth: number, relayCount: number
   
   if (fs.existsSync(indexPath)) {
     index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+    // Update version info on each run
+    index.version = {
+      script: SCRIPT_VERSION,
+      dataFormat: DATA_FORMAT_VERSION,
+    };
   } else {
     index = {
+      version: {
+        script: SCRIPT_VERSION,
+        dataFormat: DATA_FORMAT_VERSION,
+      },
       lastUpdated: new Date().toISOString(),
       dates: [],
       bandwidths: [],
@@ -471,87 +518,232 @@ function updateIndex(dateStr: string, totalBandwidth: number, relayCount: number
 }
 
 // ============================================================================
+// Date Range Parsing
+// ============================================================================
+
+interface DateRange {
+  start: Date;
+  end: Date;
+  mode: 'day' | 'month' | 'year';
+  description: string;
+}
+
+function parseDateRange(input: string): DateRange {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentCentury = Math.floor(currentYear / 100) * 100;
+  
+  // Clean input
+  input = input.trim();
+  
+  // Check for legacy --date= format first
+  if (input.startsWith('--date=')) {
+    const dateStr = input.slice(7);
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) {
+      throw new Error(`Invalid date format: ${dateStr}`);
+    }
+    return {
+      start: date,
+      end: date,
+      mode: 'day',
+      description: dateStr,
+    };
+  }
+  
+  // Parse mm/dd/yy format (specific day)
+  const dayMatch = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (dayMatch) {
+    const [, month, day, yearShort] = dayMatch;
+    const year = currentCentury + parseInt(yearShort, 10);
+    const date = new Date(year, parseInt(month, 10) - 1, parseInt(day, 10));
+    if (isNaN(date.getTime())) {
+      throw new Error(`Invalid date: ${input}`);
+    }
+    return {
+      start: date,
+      end: date,
+      mode: 'day',
+      description: date.toISOString().slice(0, 10),
+    };
+  }
+  
+  // Parse mm/yy format (entire month)
+  const monthMatch = input.match(/^(\d{1,2})\/(\d{2})$/);
+  if (monthMatch) {
+    const [, month, yearShort] = monthMatch;
+    const year = currentCentury + parseInt(yearShort, 10);
+    const monthNum = parseInt(month, 10) - 1;
+    const start = new Date(year, monthNum, 1);
+    const end = new Date(year, monthNum + 1, 0); // Last day of month
+    if (isNaN(start.getTime())) {
+      throw new Error(`Invalid month: ${input}`);
+    }
+    return {
+      start,
+      end,
+      mode: 'month',
+      description: `${year}-${String(monthNum + 1).padStart(2, '0')} (${start.toISOString().slice(0, 10)} to ${end.toISOString().slice(0, 10)})`,
+    };
+  }
+  
+  // Parse yy format (entire year)
+  const yearMatch = input.match(/^(\d{2})$/);
+  if (yearMatch) {
+    const [, yearShort] = yearMatch;
+    const year = currentCentury + parseInt(yearShort, 10);
+    const start = new Date(year, 0, 1);
+    const end = new Date(year, 11, 31);
+    return {
+      start,
+      end,
+      mode: 'year',
+      description: `${year} (${start.toISOString().slice(0, 10)} to ${end.toISOString().slice(0, 10)})`,
+    };
+  }
+  
+  // Fallback: try ISO format (YYYY-MM-DD)
+  const date = new Date(input);
+  if (!isNaN(date.getTime())) {
+    return {
+      start: date,
+      end: date,
+      mode: 'day',
+      description: date.toISOString().slice(0, 10),
+    };
+  }
+  
+  throw new Error(`Unrecognized date format: ${input}. Use mm/dd/yy, mm/yy, or yy`);
+}
+
+function generateDatesInRange(range: DateRange): string[] {
+  const dates: string[] = [];
+  const current = new Date(range.start);
+  
+  while (current <= range.end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+  
+  return dates;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 async function main() {
   console.log('\n╔════════════════════════════════════════════════════════════╗');
-  console.log('║   RouteFluxMap Unified Data Fetcher                        ║');
+  console.log(`║   RouteFluxMap Unified Data Fetcher v${SCRIPT_VERSION}                  ║`);
   console.log('╚════════════════════════════════════════════════════════════╝\n');
   
   // Parse arguments
   const args = process.argv.slice(2);
-  let targetDate = new Date().toISOString().slice(0, 10);
+  let dateRange: DateRange;
   
-  for (const arg of args) {
-    if (arg.startsWith('--date=')) {
-      targetDate = arg.slice(7);
+  if (args.length === 0) {
+    // Default: current day / last 24 hours
+    const today = new Date();
+    dateRange = {
+      start: today,
+      end: today,
+      mode: 'day',
+      description: today.toISOString().slice(0, 10) + ' (current day)',
+    };
+  } else {
+    // Try to parse the first argument as a date range
+    const dateArg = args.find(a => !a.startsWith('--') || a.startsWith('--date='));
+    if (dateArg) {
+      dateRange = parseDateRange(dateArg);
+    } else {
+      // Fallback to current day
+      const today = new Date();
+      dateRange = {
+        start: today,
+        end: today,
+        mode: 'day',
+        description: today.toISOString().slice(0, 10) + ' (current day)',
+      };
     }
   }
   
-  console.log(`  Date: ${targetDate}`);
-  console.log(`  Output: ${OUTPUT_DIR}\n`);
+  const targetDates = generateDatesInRange(dateRange);
+  
+  console.log(`  Script version: ${SCRIPT_VERSION}`);
+  console.log(`  Data format:    ${DATA_FORMAT_VERSION}`);
+  console.log(`  Date range:     ${dateRange.description}`);
+  console.log(`  Dates to fetch: ${targetDates.length}`);
+  console.log(`  Output:         ${OUTPUT_DIR}\n`);
+  
+  // For date ranges (month/year), note that Onionoo only provides live data
+  if (dateRange.mode !== 'day' || targetDates.length > 1) {
+    console.log('  ⚠ Note: Onionoo API only provides current/live relay data.');
+    console.log('         For historical relay data, use: fetch-historical-data.ts');
+    console.log('         This run will fetch live relay data + country data for each date.\n');
+  }
   
   // Ensure output directory exists
   if (!fs.existsSync(OUTPUT_DIR)) {
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   }
   
-  // Fetch data in parallel
-  console.log('━━━ Phase 1: Fetch Data (Parallel) ━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-  
   const startTime = Date.now();
   
-  const [onionooData, countryData] = await Promise.all([
-    fetchOnionooRelays(),
-    fetchCountryClients(targetDate).catch(err => {
-      console.log(`  ⚠ Country data fetch failed: ${err.message}`);
-      return null;
-    }),
-  ]);
+  // For single day: fetch both relay and country data
+  // For ranges: fetch relay data once (live), fetch country data for each date
+  
+  // Fetch relay data (always current/live from Onionoo)
+  console.log('━━━ Phase 1: Fetch Data ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  
+  const onionooData = await fetchOnionooRelays();
   
   // Process relay data
   console.log('\n━━━ Phase 2: Process & Geolocate ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   
   const processedRelays = await processRelays(onionooData);
   
-  // Extract date from published timestamp
-  const dateMatch = processedRelays.published.match(/(\d{4})-(\d{2})-(\d{2})/);
-  const dateStr = dateMatch
-    ? `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`
-    : targetDate;
+  // Extract date from published timestamp for relay data
+  const publishedMatch = processedRelays.published.match(/(\d{4})-(\d{2})-(\d{2})/);
+  const relayDateStr = publishedMatch
+    ? `${publishedMatch[1]}-${publishedMatch[2]}-${publishedMatch[3]}`
+    : targetDates[0];
   
   // Write outputs
   console.log('\n━━━ Phase 3: Write Outputs ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   
-  // Relay data
-  const relayPath = path.join(OUTPUT_DIR, `relays-${dateStr}.json`);
+  // Relay data (save once with current date)
+  const relayPath = path.join(OUTPUT_DIR, `relays-${relayDateStr}.json`);
   fs.writeFileSync(relayPath, JSON.stringify(processedRelays, null, 2));
   console.log(`  ✓ Relay data: ${relayPath}`);
   
-  // Country data
-  if (countryData) {
-    const countryPath = path.join(OUTPUT_DIR, `countries-${dateStr}.json`);
-    fs.writeFileSync(countryPath, JSON.stringify(countryData, null, 2));
-    console.log(`  ✓ Country data: ${countryPath}`);
+  // Fetch and save country data for each date in range
+  let countryCount = 0;
+  for (const targetDate of targetDates) {
+    try {
+      const countryData = await fetchCountryClients(targetDate);
+      const countryPath = path.join(OUTPUT_DIR, `countries-${targetDate}.json`);
+      fs.writeFileSync(countryPath, JSON.stringify(countryData, null, 2));
+      console.log(`  ✓ Country data: ${countryPath}`);
+      countryCount++;
+    } catch (err: any) {
+      console.log(`  ⚠ Country data for ${targetDate}: ${err.message}`);
+    }
   }
   
   // Update index
   const totalRelays = processedRelays.nodes.reduce((sum, n) => sum + n.relays.length, 0);
-  updateIndex(dateStr, processedRelays.bandwidth, totalRelays);
+  updateIndex(relayDateStr, processedRelays.bandwidth, totalRelays);
   console.log(`  ✓ Index updated`);
   
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   
   console.log('\n════════════════════════════════════════════════════════════════');
-  console.log(`  📍 Locations: ${processedRelays.nodes.length}`);
+  console.log(`  📍 Locations:    ${processedRelays.nodes.length}`);
   console.log(`  🔄 Total relays: ${totalRelays}`);
-  if (countryData) {
-    console.log(`  🌍 Countries: ${Object.keys(countryData.countries).length}`);
-    console.log(`  👥 Est. users: ${countryData.totalUsers.toLocaleString()}`);
-  }
-  console.log(`  📅 Published: ${processedRelays.published}`);
-  console.log(`  ⏱  Time: ${elapsed}s`);
+  console.log(`  🌍 Country files: ${countryCount}/${targetDates.length}`);
+  console.log(`  📅 Relay data:   ${processedRelays.published}`);
+  console.log(`  🔢 Version:      script=${SCRIPT_VERSION}, format=${DATA_FORMAT_VERSION}`);
+  console.log(`  ⏱  Time:         ${elapsed}s`);
   console.log('════════════════════════════════════════════════════════════════\n');
 }
 
