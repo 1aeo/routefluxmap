@@ -1,0 +1,25 @@
+# RouteFluxMap - URL Redirects
+# ==============================
+# Configure URL routing for Cloudflare Pages.
+# See: https://developers.cloudflare.com/pages/configuration/redirects/
+#
+# Format: [source] [destination] [status]
+#   200 = proxy/rewrite (invisible to user)
+#   301 = permanent redirect
+#   302 = temporary redirect
+#
+# NOTE: These redirects are processed BEFORE the static files.
+# If you want to serve static files normally, DON'T add redirects for them.
+
+# === EXAMPLES (uncomment as needed) ===
+
+# Proxy /data/* to external data bucket (if ENABLE_DATA_PROXY=true in config)
+# This lets you serve data from same domain without CORS issues
+# /data/* https://your-data-url/:splat 200
+
+# Redirect old URLs to new ones
+# /old-page /new-page 301
+
+# SPA fallback (for client-side routing - NOT needed for Astro static)
+# /* /index.html 200
+

@@ -57,7 +57,7 @@ Run `npm run dev` and manually verify:
 
 - [ ] Hover tooltip shows relay count at location
 - [ ] Click popup shows individual relays with nicknames
-- [ ] Metrics links open correct URL (metrics.1aeo.com/relay/{fp})
+- [ ] Metrics links open correct URL (configured metrics URL/relay/{fp})
 - [ ] Fingerprint links work (40-char hex format)
 
 ### Date Navigation

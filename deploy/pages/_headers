@@ -1,0 +1,28 @@
+# RouteFluxMap - Custom HTTP Headers
+# ====================================
+# These headers are applied by Cloudflare Pages.
+# See: https://developers.cloudflare.com/pages/configuration/headers/
+
+# Global headers for all pages
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+# Static assets - long cache
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Favicon
+/favicon.svg
+  Cache-Control: public, max-age=86400
+
+# HTML pages - shorter cache with revalidation
+/*.html
+  Cache-Control: public, max-age=3600, must-revalidate
+
+# Data files (if served from same origin)
+/data/*
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600
+

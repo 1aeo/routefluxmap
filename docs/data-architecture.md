@@ -196,7 +196,7 @@ Relay fingerprints are SHA-1 hashes of the relay's identity key.
 
 Used to link to detailed relay information:
 ```
-https://metrics.1aeo.com/relay/{fingerprint}
+{metricsUrl}/relay/{fingerprint}
 ```
 
 ---
