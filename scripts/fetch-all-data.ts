@@ -51,8 +51,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 // Version Information
 // ============================================================================
 
-const SCRIPT_VERSION = '1.0.0';
-const DATA_FORMAT_VERSION = '2.1';
+const VERSION = '1.0.0';
 
 // Parallel defaults based on workload type
 const DEFAULT_PARALLEL_DAY = 1;
@@ -107,12 +106,9 @@ interface AggregatedNode {
 }
 
 interface ProcessedRelayData {
-  version: {
-    script: string;
-    dataFormat: string;
-    generatedAt: string;
-    source: 'onionoo' | 'collector';
-  };
+  version: string;
+  generatedAt: string;
+  source: 'onionoo' | 'collector';
   geoip: {
     provider: 'maxmind' | 'geoip-lite' | 'country-centroid';
     version?: string;
@@ -127,21 +123,15 @@ interface ProcessedRelayData {
 }
 
 interface CountryData {
-  version: {
-    script: string;
-    dataFormat: string;
-    generatedAt: string;
-  };
+  version: string;
+  generatedAt: string;
   date: string;
   totalUsers: number;
   countries: { [code: string]: number };
 }
 
 interface DateIndex {
-  version: {
-    script: string;
-    dataFormat: string;
-  };
+  version: string;
   lastUpdated: string;
   dates: string[];
   // Bandwidth array for sparkline/chart preview (lightweight)
@@ -541,7 +531,7 @@ function fetchOnionooRelays(): Promise<OnionooResponse> {
       hostname: 'onionoo.torproject.org',
       path: '/details?type=relay&running=true',
       method: 'GET',
-      headers: { 'User-Agent': `RouteFluxMap-DataFetcher/${SCRIPT_VERSION}` },
+      headers: { 'User-Agent': `RouteFluxMap-DataFetcher/${VERSION}` },
     };
     
     const req = https.request(options, (res) => {
@@ -1382,11 +1372,8 @@ function fetchMonthlyCountryDataOnce(year: number, month: number): Promise<Map<s
         const result = new Map<string, CountryData>();
         for (const [dateStr, entry] of byDate) {
           result.set(dateStr, {
-            version: {
-              script: SCRIPT_VERSION,
-              dataFormat: DATA_FORMAT_VERSION,
-              generatedAt: new Date().toISOString(),
-            },
+            version: VERSION,
+            generatedAt: new Date().toISOString(),
             date: dateStr,
             totalUsers: entry.totalUsers || entry.countrySum,
             countries: entry.countries,
@@ -1458,11 +1445,8 @@ function fetchDailyCountryDataOnce(date: string): Promise<CountryData> {
         }
         
         resolve({
-          version: {
-            script: SCRIPT_VERSION,
-            dataFormat: DATA_FORMAT_VERSION,
-            generatedAt: new Date().toISOString(),
-          },
+          version: VERSION,
+          generatedAt: new Date().toISOString(),
           date,
           totalUsers,
           countries,
@@ -1581,12 +1565,9 @@ function buildProcessedData(
   nodes.sort((a, b) => b.bandwidth - a.bandwidth);
   
   return {
-    version: {
-      script: SCRIPT_VERSION,
-      dataFormat: DATA_FORMAT_VERSION,
-      generatedAt: new Date().toISOString(),
-      source,
-    },
+    version: VERSION,
+    generatedAt: new Date().toISOString(),
+    source,
     geoip: {
       provider: geoipMetadata.provider,
       version: geoipMetadata.version,
@@ -1624,10 +1605,7 @@ function updateIndex(): void {
   }
   
   const index: DateIndex = {
-    version: {
-      script: SCRIPT_VERSION,
-      dataFormat: DATA_FORMAT_VERSION,
-    },
+    version: VERSION,
     lastUpdated: new Date().toISOString(),
     dates,
     bandwidths,
@@ -1761,7 +1739,7 @@ async function processDate(dateStr: string): Promise<void> {
 
 async function main() {
   console.log('\n╔════════════════════════════════════════════════════════════════╗');
-  console.log(`║   RouteFluxMap Unified Data Fetcher v${SCRIPT_VERSION}                     ║`);
+  console.log(`║   RouteFluxMap Unified Data Fetcher v${VERSION}                     ║`);
   console.log('╚════════════════════════════════════════════════════════════════╝\n');
   
   // Parse arguments
@@ -1820,8 +1798,7 @@ async function main() {
   USE_BATCH_COUNTRY_FETCH = targetDates.length >= 7;
   
   console.log('  Configuration:');
-  console.log(`    Script version:  ${SCRIPT_VERSION}`);
-  console.log(`    Data format:     ${DATA_FORMAT_VERSION}`);
+  console.log(`    Version:         ${VERSION}`);
   console.log(`    Date range:      ${dateRange.description}`);
   console.log(`    Dates to fetch:  ${targetDates.length}`);
   console.log(`    Parallel:        ${parallel}`);
@@ -1902,7 +1879,7 @@ async function main() {
   console.log(`    ✗  Failed:          ${status.failed}`);
   console.log(`    🔄 Total relays:    ${status.totalRelays.toLocaleString()}`);
   console.log(`    📍 Geolocated:      ${status.totalGeolocated.toLocaleString()}`);
-  console.log(`    🔢 Version:         script=${SCRIPT_VERSION}, format=${DATA_FORMAT_VERSION}`);
+  console.log(`    🔢 Version:         ${VERSION}`);
   console.log(`    ⏱  Total time:      ${elapsed}s`);
   
   if (processedTimings.length > 0) {
