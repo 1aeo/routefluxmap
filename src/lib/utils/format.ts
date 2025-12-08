@@ -91,4 +91,36 @@ export function parseDateFromUrl(hash: string): { year: number; month: number; d
   };
 }
 
+/**
+ * Format a month key (YYYY-MM) to display format
+ * @example formatMonth('2024-12') // 'Dec 2024'
+ */
+export function formatMonth(monthKey: string): string {
+  const [year, month] = monthKey.split('-');
+  const date = new Date(parseInt(year), parseInt(month) - 1, 1);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Format a full date string to month + year only
+ * @example formatMonthYear('2024-12-01') // 'Dec 2024'
+ */
+export function formatMonthYear(dateStr: string): string {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Format a year key for display (passthrough)
+ * @example formatYear('2024') // '2024'
+ */
+export function formatYear(yearKey: string): string {
+  return yearKey;
+}
 

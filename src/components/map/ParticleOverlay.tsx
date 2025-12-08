@@ -163,7 +163,7 @@ export function useParticleLayer({
     }
 
     let frameCount = 0;
-    const UPDATE_INTERVAL = 2; // Update React state every N frames
+    const UPDATE_INTERVAL = 3; // Update React state every N frames (3 = 20fps, still smooth)
     const PATH_UPDATE_INTERVAL = 30; // Update paths less frequently (every ~0.5s)
 
     const animate = (currentTime: number) => {
