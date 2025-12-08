@@ -341,6 +341,23 @@ export default function TorMap() {
   // Check if we have actual relay nodes to display
   const hasRelayNodes = !!(relayData && relayData.nodes && relayData.nodes.length > 0);
   
+  // Memoize expensive relay calculations (only recompute when relayData changes)
+  const { maxRelayCount, maxBandwidth } = useMemo(() => {
+    if (!relayData?.nodes?.length) {
+      return { maxRelayCount: 1, maxBandwidth: 0 };
+    }
+    return {
+      maxRelayCount: Math.max(...relayData.nodes.map(n => n.relays.length), 1),
+      maxBandwidth: relayData.minMax.max,
+    };
+  }, [relayData]);
+
+  // Memoize zoom-based calculations (only recompute when zoom changes)
+  const { zoomScale, baseMinPixels, baseMaxPixels } = useMemo(() => ({
+    zoomScale: calculateZoomScale(viewState.zoom),
+    ...getZoomPixelConstraints(viewState.zoom),
+  }), [viewState.zoom]);
+
   // Particle layer - smaller dots with opacity (only if we have relay nodes)
   const particleLayers = useParticleLayer({
     nodes: relayData?.nodes ?? [],
@@ -377,15 +394,6 @@ export default function TorMap() {
     // Relay layer (only if we have actual nodes)
     const hasNodes = relayData && relayData.nodes && relayData.nodes.length > 0;
     if (hasNodes && layerVisibility.relays) {
-      // Find max relay count for scaling
-      const maxRelayCount = Math.max(...relayData.nodes.map(n => n.relays.length), 1);
-      const maxBandwidth = relayData.minMax.max;
-      
-      // Use extracted utility functions for zoom-based calculations
-      const zoom = viewState.zoom;
-      const zoomScale = calculateZoomScale(zoom);
-      const { baseMinPixels, baseMaxPixels } = getZoomPixelConstraints(zoom);
-      
       result.push(
         new ScatterplotLayer({
           id: 'relays',
@@ -400,7 +408,7 @@ export default function TorMap() {
           lineWidthMinPixels: 1,
           getPosition: (d: AggregatedNode) => [d.lng, d.lat],
           getRadius: (d: AggregatedNode) =>
-            calculateNodeRadius(d, zoom, maxRelayCount, maxBandwidth),
+            calculateNodeRadius(d, viewState.zoom, maxRelayCount, maxBandwidth),
           getFillColor: (d: AggregatedNode) => {
             // Color by relay type: Exit (orange) > Guard (deep green) > Middle (mint green)
             const hasExit = d.relays.some(r => r.flags.includes('E'));
@@ -415,7 +423,7 @@ export default function TorMap() {
           onHover: handleHover,
           updateTriggers: {
             getFillColor: [relayData],
-            getRadius: [relayData, zoom],
+            getRadius: [relayData, viewState.zoom, maxRelayCount, maxBandwidth],
             opacity: [relayOpacity],
             getLineColor: [relayOpacity],
           },
@@ -424,7 +432,7 @@ export default function TorMap() {
     }
     
     return result;
-  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick, relayOpacity]);
+  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
 
   // Combine base layers with particle layer (particle layer updates independently)
   const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
