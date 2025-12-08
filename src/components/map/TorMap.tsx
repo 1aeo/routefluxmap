@@ -10,7 +10,8 @@ import { Map } from 'react-map-gl/maplibre';
 import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
-import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce } from '../../lib/utils/url';
+import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode, updateCountryCode } from '../../lib/utils/url';
+import { countryCentroids } from '../../lib/utils/geo';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
 // Transition duration for relay dot fading
@@ -25,6 +26,7 @@ import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
+import LoadingBar from '../ui/LoadingBar';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import { useParticleLayer } from './ParticleOverlay';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -38,10 +40,14 @@ const INITIAL_VIEW_STATE: MapViewState = {
   bearing: 0,
 };
 
+// Default zoom level when centering on a country
+const COUNTRY_ZOOM = 5;
+
 // Get initial view state from URL or use defaults
 function getInitialViewState(): MapViewState {
   if (typeof window === 'undefined') return INITIAL_VIEW_STATE;
   
+  // First check for explicit map location (takes priority)
   const mapLocation = parseMapLocation();
   if (mapLocation) {
     return {
@@ -51,6 +57,19 @@ function getInitialViewState(): MapViewState {
       zoom: mapLocation.zoom,
     };
   }
+  
+  // Then check for country code
+  const countryCode = parseCountryCode();
+  if (countryCode && countryCentroids[countryCode]) {
+    const [lng, lat] = countryCentroids[countryCode];
+    return {
+      ...INITIAL_VIEW_STATE,
+      longitude: lng,
+      latitude: lat,
+      zoom: COUNTRY_ZOOM,
+    };
+  }
+  
   return INITIAL_VIEW_STATE;
 }
 
@@ -124,6 +143,8 @@ export default function TorMap() {
     const newViewState = params.viewState as MapViewState;
     setViewState(newViewState);
     debouncedUpdateMapLocation(newViewState.longitude, newViewState.latitude, newViewState.zoom);
+    // Clear country code when user manually pans/zooms (they're no longer viewing that specific country)
+    updateCountryCode(null);
   }, [debouncedUpdateMapLocation]);
 
   // Fetch index and return new date if found
@@ -363,10 +384,23 @@ export default function TorMap() {
     }
   }, []);
 
-  // Handle country click
+  // Handle country click - center on country and update URL
   const handleCountryClick = useCallback((code: string, name: string) => {
-    console.log(`Country clicked: ${name} (${code})`);
-    // TODO: Show country statistics popup
+    const centroid = countryCentroids[code];
+    if (centroid) {
+      const [lng, lat] = centroid;
+      setViewState(prev => ({
+        ...prev,
+        longitude: lng,
+        latitude: lat,
+        zoom: COUNTRY_ZOOM,
+      }));
+      // Update URL with country code
+      updateCountryCode(code);
+      // Also update ML to match the new position
+      updateUrlHash('ML', formatMapLocation(lng, lat, COUNTRY_ZOOM));
+    }
+    // TODO: Show country statistics popup (outlier chart)
   }, []);
 
   // Check if we have actual relay nodes to display
@@ -390,7 +424,7 @@ export default function TorMap() {
   }), [viewState.zoom]);
 
   // Particle layer - smaller dots with opacity (only if we have relay nodes)
-  const particleLayers = useParticleLayer({
+  const { layers: particleLayers, progress: particleProgress, isGenerating: isGeneratingParticles } = useParticleLayer({
     nodes: relayData?.nodes ?? [],
     visible: layerVisibility.particles && hasRelayNodes,
     particleCount,
@@ -513,6 +547,11 @@ export default function TorMap() {
 
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
+      
+      {/* Particle generation progress */}
+      {isGeneratingParticles && particleProgress !== null && (
+        <LoadingBar progress={particleProgress} label="Generating particles" />
+      )}
       
       {/* No relay data toast - shown when data was fetched but has no nodes, or no dates available */}
       {!loading && !initialLoading && (

@@ -5,7 +5,10 @@
  * Renders using Deck.gl ScatterplotLayer with frequent position updates.
  * Also renders LineLayer for traffic paths.
  * 
- * Features smooth fade transitions when switching between days.
+ * Features:
+ * - Web Worker for off-thread particle generation (prevents UI freeze)
+ * - Smooth fade transitions when switching between days
+ * - Progress reporting during generation
  */
 
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react';
@@ -13,6 +16,7 @@ import { ScatterplotLayer, LineLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
 import type { AggregatedNode } from '../../lib/types';
 import { ParticleSystem, type ParticleState } from '../../lib/particles/particle-system';
+import { useParticleWorker, generateParticlesSync } from '../../lib/particles/use-particle-worker';
 import { config } from '../../lib/config';
 
 // Transition duration in milliseconds
@@ -30,6 +34,16 @@ export interface ParticleOverlayProps {
   lineDensityFactor?: number; // 0.1 to 6.0, default 4.0
   lineOpacityFactor?: number; // 0.1 to 6.0, default 4.0
   onLayerUpdate?: (layers: Layer[] | null) => void;
+  /** Whether to use web worker for particle generation (default: true) */
+  useWorker?: boolean;
+}
+
+export interface ParticleLayerResult {
+  layers: Layer[] | null;
+  /** Generation progress 0-1, null when not generating */
+  progress: number | null;
+  /** Whether particles are being generated */
+  isGenerating: boolean;
 }
 
 // Default colors (RGB 0-255)
@@ -61,7 +75,8 @@ export function useParticleLayer({
   trafficType = 'all',
   lineDensityFactor = 1.0,
   lineOpacityFactor = 1.0,
-}: ParticleOverlayProps): Layer[] | null {
+  useWorker = true,
+}: ParticleOverlayProps): ParticleLayerResult {
   const particleSystemRef = useRef<ParticleSystem | null>(null);
   const positionsRef = useRef<ParticleState[]>([]);
   const pathsRef = useRef<PathData[]>([]);
@@ -77,6 +92,16 @@ export function useParticleLayer({
   const transitionRef = useRef<{ startTime: number; animationId: number | null }>({ startTime: 0, animationId: null });
   const prevNodesRef = useRef<AggregatedNode[]>([]);
 
+  // Web worker for particle generation
+  const baseSpeed = 0.0003 * speedFactor;
+  const { buffers, progress, isGenerating, error } = useParticleWorker({
+    nodes,
+    particleCount,
+    hiddenServiceProbability,
+    baseSpeed,
+    enabled: useWorker && visible && nodes.length >= 2,
+  });
+
   // Handle transition animation
   const startTransition = useCallback(() => {
     // Cancel any existing transition
@@ -90,13 +115,13 @@ export function useParticleLayer({
     
     const animateTransition = () => {
       const elapsed = performance.now() - transitionRef.current.startTime;
-      const progress = Math.min(1, elapsed / TRANSITION_DURATION_MS);
+      const progressVal = Math.min(1, elapsed / TRANSITION_DURATION_MS);
       
       // Ease-out curve for smooth appearance
-      const easedProgress = 1 - Math.pow(1 - progress, 3);
+      const easedProgress = 1 - Math.pow(1 - progressVal, 3);
       setTransitionOpacity(easedProgress);
       
-      if (progress < 1) {
+      if (progressVal < 1) {
         transitionRef.current.animationId = requestAnimationFrame(animateTransition);
       } else {
         transitionRef.current.animationId = null;
@@ -106,7 +131,7 @@ export function useParticleLayer({
     transitionRef.current.animationId = requestAnimationFrame(animateTransition);
   }, []);
 
-  // Initialize particle system when nodes change
+  // Initialize particle system when worker completes or fallback to sync generation
   useEffect(() => {
     if (!nodes || nodes.length < 2) {
       particleSystemRef.current = null;
@@ -123,17 +148,35 @@ export function useParticleLayer({
     
     prevNodesRef.current = nodes;
 
-    const system = new ParticleSystem();
-    system.initialize(nodes, particleCount, {
-      hiddenServiceProbability,
-      offsetFactor,
-      baseSpeed: 0.0003 * speedFactor,
-    });
-    particleSystemRef.current = system;
+    // If using worker, wait for buffers
+    if (useWorker) {
+      if (!buffers) {
+        // Still waiting for worker to complete
+        setSystemReady(false);
+        return;
+      }
+      
+      // Initialize from worker-generated buffers
+      const system = new ParticleSystem();
+      system.initializeFromBuffers(nodes, buffers.particles, buffers.isHiddenService, {
+        hiddenServiceProbability,
+        baseSpeed,
+      });
+      particleSystemRef.current = system;
+    } else {
+      // Fallback: synchronous generation on main thread
+      const system = new ParticleSystem();
+      system.initialize(nodes, particleCount, {
+        hiddenServiceProbability,
+        offsetFactor,
+        baseSpeed,
+      });
+      particleSystemRef.current = system;
+    }
 
     // Get initial positions and paths
-    positionsRef.current = system.getPositions();
-    pathsRef.current = system.getActivePaths();
+    positionsRef.current = particleSystemRef.current.getPositions();
+    pathsRef.current = particleSystemRef.current.getActivePaths();
     setSystemReady(true);
     setTick(t => t + 1); // Trigger initial render
     
@@ -141,7 +184,7 @@ export function useParticleLayer({
     if (nodesChanged) {
       startTransition();
     }
-  }, [nodes, particleCount, hiddenServiceProbability, offsetFactor, speedFactor, startTransition]);
+  }, [nodes, buffers, useWorker, particleCount, hiddenServiceProbability, offsetFactor, baseSpeed, startTransition]);
   
   // Cleanup transition on unmount
   useEffect(() => {
@@ -314,14 +357,18 @@ export function useParticleLayer({
     return result;
   }, [visible, filteredPositions, particleSize, tick, lineDensityFactor, lineOpacityFactor, trafficType, transitionOpacity]);
 
-  return layers;
+  return {
+    layers,
+    progress,
+    isGenerating,
+  };
 }
 
 /**
  * Standalone component for particles (if needed outside TorMap)
  */
 export default function ParticleOverlay(props: ParticleOverlayProps) {
-  const layers = useParticleLayer(props);
+  const { layers } = useParticleLayer(props);
   
   useEffect(() => {
     if (props.onLayerUpdate) {

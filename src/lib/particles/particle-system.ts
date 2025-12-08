@@ -42,7 +42,7 @@ export class ParticleSystem {
   constructor() {}
 
   /**
-   * Initialize particles from nodes
+   * Initialize particles from nodes (synchronous, runs on main thread)
    */
   initialize(
     nodes: AggregatedNode[],
@@ -69,6 +69,57 @@ export class ParticleSystem {
     this.particles = [];
     for (let i = 0; i < particleCount; i++) {
       this.particles.push(this.createParticle(i));
+    }
+  }
+
+  /**
+   * Initialize particles from pre-generated buffer data (from web worker).
+   * This is the preferred method when using web workers for generation.
+   * 
+   * @param nodes - The nodes array (needed for particle resets during animation)
+   * @param particleData - Float32Array: [startLng, startLat, endLng, endLat, progress, speed] per particle
+   * @param isHiddenService - Uint8Array: boolean flags per particle
+   * @param options - Configuration options
+   */
+  initializeFromBuffers(
+    nodes: AggregatedNode[],
+    particleData: Float32Array,
+    isHiddenService: Uint8Array,
+    options: {
+      hiddenServiceProbability?: number;
+      baseSpeed?: number;
+    } = {}
+  ): void {
+    this.nodes = nodes;
+    this.hiddenServiceProbability = options.hiddenServiceProbability ?? 0.04;
+    this.baseSpeed = options.baseSpeed ?? 0.0005;
+
+    if (!nodes || nodes.length < 2 || particleData.length === 0) {
+      this.particles = [];
+      this.cumulativeProbs = [];
+      return;
+    }
+
+    // Build cumulative probability array for O(log n) binary search
+    // (needed for particle resets during animation)
+    this.buildCumulativeProbs();
+
+    // Each particle has 6 floats: startLng, startLat, endLng, endLat, progress, speed
+    const particleCount = particleData.length / 6;
+    this.particles = [];
+
+    for (let i = 0; i < particleCount; i++) {
+      const offset = i * 6;
+      this.particles.push({
+        id: i,
+        startLng: particleData[offset],
+        startLat: particleData[offset + 1],
+        endLng: particleData[offset + 2],
+        endLat: particleData[offset + 3],
+        progress: particleData[offset + 4],
+        speed: particleData[offset + 5],
+        isHiddenService: isHiddenService[i] === 1,
+      });
     }
   }
 
