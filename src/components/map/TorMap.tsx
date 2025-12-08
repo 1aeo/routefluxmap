@@ -28,7 +28,7 @@ import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
 import LoadingBar from '../ui/LoadingBar';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
-import { useParticleLayer } from './ParticleOverlay';
+import ParticleCanvas from './ParticleCanvas';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 
@@ -489,21 +489,29 @@ export default function TorMap() {
     ...getZoomPixelConstraints(viewState.zoom),
   }), [viewState.zoom]);
 
-  // Particle layer - smaller dots with opacity (only if we have relay nodes)
-  const { layers: particleLayers, progress: particleProgress, isGenerating: isGeneratingParticles } = useParticleLayer({
-    nodes: relayData?.nodes ?? [],
-    visible: layerVisibility.particles && hasRelayNodes,
-    particleCount,
-    particleSize: 1, // Smaller particles
-    speedFactor: lineSpeedFactor,
-    offsetFactor: config.particleOffset.default,
-    hiddenServiceProbability: config.hiddenServiceProbability,
-    trafficType,
-    lineDensityFactor,
-    lineOpacityFactor,
-  });
+  // Track container dimensions for ParticleCanvas
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
 
-  // Create static layers (without particles to avoid re-render loops)
+  // Update container size on resize
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const updateSize = () => {
+      if (containerRef.current) {
+        setContainerSize({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight,
+        });
+      }
+    };
+
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
+
+  // Create static layers (without particles - particles now render on separate OffscreenCanvas)
   const baseLayers = useMemo(() => {
     const result: any[] = [];
     
@@ -565,8 +573,8 @@ export default function TorMap() {
     return result;
   }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
 
-  // Combine base layers with particle layer (particle layer updates independently)
-  const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
+  // Use base layers only - particles now render on separate OffscreenCanvas
+  const layers = baseLayers;
 
   // Initial Loading state (only shown on first load)
   if (initialLoading && !relayData) {
@@ -597,7 +605,7 @@ export default function TorMap() {
   }
 
   return (
-    <div className="relative w-full h-full">
+    <div ref={containerRef} className="relative w-full h-full">
       <DeckGL
         viewState={viewState}
         onViewStateChange={handleViewStateChange}
@@ -613,13 +621,23 @@ export default function TorMap() {
         />
       </DeckGL>
 
+      {/* Particle canvas - renders on separate thread via OffscreenCanvas */}
+      {relayData?.nodes && (
+        <ParticleCanvas
+          nodes={relayData.nodes}
+          visible={layerVisibility.particles && hasRelayNodes}
+          particleCount={particleCount}
+          hiddenServiceProbability={config.hiddenServiceProbability}
+          baseSpeed={0.0003 * lineSpeedFactor}
+          viewState={viewState}
+          containerWidth={containerSize.width}
+          containerHeight={containerSize.height}
+        />
+      )}
+
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
       
-      {/* Particle generation progress */}
-      {isGeneratingParticles && particleProgress !== null && (
-        <LoadingBar progress={particleProgress} label="Generating particles" />
-      )}
       
       {/* No relay data toast - shown when data was fetched but has no nodes, or no dates available */}
       {!loading && !initialLoading && (
