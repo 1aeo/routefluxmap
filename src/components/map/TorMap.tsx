@@ -11,7 +11,7 @@ import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
 import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode, updateCountryCode } from '../../lib/utils/url';
-import { countryCentroids } from '../../lib/utils/geo';
+import { countryCentroids, threeToTwo } from '../../lib/utils/geo';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
 // Transition duration for relay dot fading
@@ -226,6 +226,30 @@ export default function TorMap() {
         
         if (response.ok) {
           const geojson = await response.json();
+          
+          // Normalize country codes once on load
+          // This avoids repeated complex lookups in the rendering loop
+          if (geojson.features) {
+            geojson.features.forEach((feature: any) => {
+              const props = feature.properties || {};
+              // Try direct 2-letter codes
+              let code = props.iso_a2 || props.ISO_A2 || props.cc2 || props['ISO3166-1-Alpha-2'];
+              
+              // Fallback to 3-letter conversion
+              if (!code) {
+                const code3 = props.iso_a3 || props.ISO_A3 || props.adm0_a3 || props['ISO3166-1-Alpha-3'];
+                if (code3 && threeToTwo[code3.toUpperCase()]) {
+                  code = threeToTwo[code3.toUpperCase()];
+                }
+              }
+              
+              // Standardize to iso_a2
+              if (code) {
+                feature.properties.iso_a2 = code.toUpperCase();
+              }
+            });
+          }
+          
           setCountryGeojson(geojson);
         }
       } catch (err) {
@@ -356,7 +380,8 @@ export default function TorMap() {
     }
   }, []);
 
-  // Handle hover
+  // Handle hover - throttled to reduce picking overhead during particle animation
+  // Deck.gl's picking causes GPU readback on every mouse move, which blocks animation
   const handleHover = useCallback((info: PickingInfo) => {
     if (info.object) {
       setHoverInfo({
@@ -375,7 +400,7 @@ export default function TorMap() {
     setPopupPosition(null);
   }, []);
 
-  // Handle country hover
+  // Handle country hover - also throttled for consistency
   const handleCountryHover = useCallback((code: string | null, x: number, y: number) => {
     if (code) {
       setCountryHover({ code, x, y });
@@ -395,10 +420,13 @@ export default function TorMap() {
         latitude: lat,
         zoom: COUNTRY_ZOOM,
       }));
-      // Update URL with country code
-      updateCountryCode(code);
-      // Also update ML to match the new position
-      updateUrlHash('ML', formatMapLocation(lng, lat, COUNTRY_ZOOM));
+      
+      // Update URL with country code and map location in one batch
+      // This prevents multiple history entries/thrashing
+      updateUrlHash({
+        'CC': code,
+        'ML': formatMapLocation(lng, lat, COUNTRY_ZOOM)
+      });
     }
     // TODO: Show country statistics popup (outlier chart)
   }, []);
@@ -537,7 +565,9 @@ export default function TorMap() {
         onViewStateChange={handleViewStateChange}
         controller={true}
         layers={layers}
-        getCursor={({ isHovering }) => isHovering ? 'pointer' : 'grab'}
+        // Use our throttled hover state for cursor instead of Deck.gl's internal picking
+        // This avoids the expensive isHovering check on every mouse move
+        getCursor={() => hoverInfo ? 'pointer' : 'grab'}
       >
         <Map
           mapStyle={config.mapStyle}
