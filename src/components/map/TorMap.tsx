@@ -10,7 +10,7 @@ import { Map } from 'react-map-gl/maplibre';
 import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
-import { parseUrlHash } from '../../lib/utils/url';
+import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce } from '../../lib/utils/url';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
 // Transition duration for relay dot fading
@@ -38,8 +38,24 @@ const INITIAL_VIEW_STATE: MapViewState = {
   bearing: 0,
 };
 
+// Get initial view state from URL or use defaults
+function getInitialViewState(): MapViewState {
+  if (typeof window === 'undefined') return INITIAL_VIEW_STATE;
+  
+  const mapLocation = parseMapLocation();
+  if (mapLocation) {
+    return {
+      ...INITIAL_VIEW_STATE,
+      longitude: mapLocation.longitude,
+      latitude: mapLocation.latitude,
+      zoom: mapLocation.zoom,
+    };
+  }
+  return INITIAL_VIEW_STATE;
+}
+
 export default function TorMap() {
-  const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
+  const [viewState, setViewState] = useState<MapViewState>(getInitialViewState);
   const [relayData, setRelayData] = useState<RelayData | null>(null);
   const [dateIndex, setDateIndex] = useState<DateIndex | null>(null);
   const [currentDate, setCurrentDate] = useState<string | null>(null);
@@ -94,6 +110,21 @@ export default function TorMap() {
   
   // Track previously known dates to detect new ones
   const prevDatesRef = useRef<string[]>([]);
+
+  // Debounced URL updater for map location (300ms delay to avoid spamming during pan/zoom)
+  const debouncedUpdateMapLocation = useMemo(
+    () => debounce((lng: number, lat: number, zoom: number) => {
+      updateUrlHash('ML', formatMapLocation(lng, lat, zoom));
+    }, 300),
+    []
+  );
+
+  // Handle view state change with URL persistence
+  const handleViewStateChange = useCallback((params: any) => {
+    const newViewState = params.viewState as MapViewState;
+    setViewState(newViewState);
+    debouncedUpdateMapLocation(newViewState.longitude, newViewState.latitude, newViewState.zoom);
+  }, [debouncedUpdateMapLocation]);
 
   // Fetch index and return new date if found
   const fetchIndexData = useCallback(async (): Promise<string | null> => {
@@ -469,7 +500,7 @@ export default function TorMap() {
     <div className="relative w-full h-full">
       <DeckGL
         viewState={viewState}
-        onViewStateChange={({ viewState }) => setViewState(viewState as MapViewState)}
+        onViewStateChange={handleViewStateChange}
         controller={true}
         layers={layers}
         getCursor={({ isHovering }) => isHovering ? 'pointer' : 'grab'}

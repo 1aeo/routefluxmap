@@ -97,3 +97,58 @@ export function clearUrlHash(): void {
   );
 }
 
+/**
+ * Create a debounced function that delays invoking func until after wait ms
+ * have elapsed since the last time it was invoked.
+ */
+export function debounce<T extends (...args: any[]) => void>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  return (...args: Parameters<T>) => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(() => {
+      func(...args);
+      timeoutId = null;
+    }, wait);
+  };
+}
+
+/**
+ * Parse map location from URL hash (ML parameter)
+ * Format: ML=longitude,latitude,zoom
+ * 
+ * @example
+ * // URL: https://example.com#date=2024-01-15&ML=-40.5,30.2,4
+ * parseMapLocation() // { longitude: -40.5, latitude: 30.2, zoom: 4 }
+ */
+export function parseMapLocation(): { longitude: number; latitude: number; zoom: number } | null {
+  const ml = getUrlHashParam('ML');
+  if (!ml) return null;
+
+  const parts = ml.split(',').map(parseFloat);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+
+  const [longitude, latitude, zoom] = parts;
+  
+  // Validate ranges
+  if (longitude < -180 || longitude > 180) return null;
+  if (latitude < -90 || latitude > 90) return null;
+  if (zoom < 0 || zoom > 22) return null;
+
+  return { longitude, latitude, zoom };
+}
+
+/**
+ * Format map location for URL hash
+ * 
+ * @example
+ * formatMapLocation(-40.5, 30.2, 4) // '-40.50,30.20,4.0'
+ */
+export function formatMapLocation(longitude: number, latitude: number, zoom: number): string {
+  return `${longitude.toFixed(2)},${latitude.toFixed(2)},${zoom.toFixed(1)}`;
+}
