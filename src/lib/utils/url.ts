@@ -27,25 +27,34 @@ export function parseUrlHash(): Record<string, string> {
 }
 
 /**
- * Update a single parameter in the URL hash without affecting others
- *
- * @param key - The parameter key to update
- * @param value - The new value (empty string removes the parameter)
- *
+ * Update one or more parameters in the URL hash
+ * 
+ * @param updates - Record of key-value pairs to update. Value of null/empty string removes the key.
+ * 
  * @example
- * // Current URL: https://example.com#date=2024-01-15
- * updateUrlHash('zoom', '5')
- * // Result: https://example.com#date=2024-01-15&zoom=5
+ * updateUrlHash({ zoom: '5', date: '2024-01-01' })
  */
-export function updateUrlHash(key: string, value: string): void {
+export function updateUrlHash(updates: Record<string, string | null> | string, value?: string): void {
   if (typeof window === 'undefined') return;
 
   const params = parseUrlHash();
 
-  if (value) {
-    params[key] = value;
+  if (typeof updates === 'string') {
+    // Single key-value update
+    if (value) {
+      params[updates] = value;
+    } else {
+      delete params[updates];
+    }
   } else {
-    delete params[key];
+    // Batch update
+    Object.entries(updates).forEach(([key, val]) => {
+      if (val) {
+        params[key] = val;
+      } else {
+        delete params[key];
+      }
+    });
   }
 
   const hashString = Object.entries(params)
@@ -151,4 +160,25 @@ export function parseMapLocation(): { longitude: number; latitude: number; zoom:
  */
 export function formatMapLocation(longitude: number, latitude: number, zoom: number): string {
   return `${longitude.toFixed(2)},${latitude.toFixed(2)},${zoom.toFixed(1)}`;
+}
+
+/**
+ * Parse country code from URL hash (CC parameter)
+ * 
+ * @example
+ * // URL: https://example.com#date=2024-01-15&CC=US
+ * parseCountryCode() // 'US'
+ */
+export function parseCountryCode(): string | null {
+  const cc = getUrlHashParam('CC');
+  if (!cc || cc.length !== 2) return null;
+  return cc.toUpperCase();
+}
+
+/**
+ * Update country code in URL hash
+ * Pass null or empty string to remove
+ */
+export function updateCountryCode(code: string | null): void {
+  updateUrlHash('CC', code?.toUpperCase() || '');
 }

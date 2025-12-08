@@ -11,6 +11,8 @@ import {
   debounce,
   parseMapLocation,
   formatMapLocation,
+  parseCountryCode,
+  updateCountryCode,
 } from '../../src/lib/utils/url';
 
 describe('URL Hash Utilities', () => {
@@ -249,6 +251,65 @@ describe('URL Hash Utilities', () => {
       fn(1, 2);
       await new Promise(resolve => setTimeout(resolve, 100));
       expect(receivedArgs).toEqual([1, 2]);
+    });
+  });
+
+  describe('parseCountryCode', () => {
+    it('parses valid 2-letter country code', () => {
+      window.location.hash = '#CC=US';
+      expect(parseCountryCode()).toBe('US');
+    });
+
+    it('converts to uppercase', () => {
+      window.location.hash = '#CC=de';
+      expect(parseCountryCode()).toBe('DE');
+    });
+
+    it('parses CC with other parameters', () => {
+      window.location.hash = '#date=2024-12-01&CC=RU&ML=10,20,5';
+      expect(parseCountryCode()).toBe('RU');
+    });
+
+    it('returns null when CC parameter missing', () => {
+      window.location.hash = '#date=2024-12-01';
+      expect(parseCountryCode()).toBeNull();
+    });
+
+    it('returns null for invalid length', () => {
+      window.location.hash = '#CC=USA';
+      expect(parseCountryCode()).toBeNull();
+    });
+
+    it('returns null for single character', () => {
+      window.location.hash = '#CC=U';
+      expect(parseCountryCode()).toBeNull();
+    });
+  });
+
+  describe('updateCountryCode', () => {
+    it('adds country code to URL', () => {
+      window.location.hash = '#date=2024-12-01';
+      updateCountryCode('US');
+      expect(getUrlHashParam('CC')).toBe('US');
+    });
+
+    it('converts to uppercase', () => {
+      window.location.hash = '';
+      updateCountryCode('de');
+      expect(getUrlHashParam('CC')).toBe('DE');
+    });
+
+    it('removes country code when null', () => {
+      window.location.hash = '#CC=US&date=2024-12-01';
+      updateCountryCode(null);
+      expect(getUrlHashParam('CC')).toBeUndefined();
+      expect(getUrlHashParam('date')).toBe('2024-12-01');
+    });
+
+    it('removes country code when empty string', () => {
+      window.location.hash = '#CC=US';
+      updateCountryCode('');
+      expect(getUrlHashParam('CC')).toBeUndefined();
     });
   });
 });
