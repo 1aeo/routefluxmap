@@ -26,10 +26,7 @@ export interface AggregatedNode {
 
 // Date index from storage
 export interface DateIndex {
-  version?: {
-    script: string;
-    dataFormat: string;
-  };
+  version?: string;
   lastUpdated: string;
   dates: string[];
   bandwidths: number[];
@@ -41,12 +38,9 @@ export interface DateIndex {
 
 // Relay data for a specific date
 export interface RelayData {
-  version?: {
-    script: string;
-    dataFormat: string;
-    generatedAt: string;
-    source: 'onionoo' | 'collector';
-  };
+  version?: string;
+  generatedAt?: string;
+  source?: 'onionoo' | 'collector';
   published: string;
   nodes: AggregatedNode[];
   bandwidth: number;
