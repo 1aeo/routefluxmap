@@ -1611,7 +1611,10 @@ function updateIndex(): void {
     bandwidths,
   };
   
-  fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+  // Atomic write: write to temp file, then rename (avoids race condition with rclone)
+  const tempPath = indexPath + '.tmp';
+  fs.writeFileSync(tempPath, JSON.stringify(index, null, 2));
+  fs.renameSync(tempPath, indexPath);
 }
 
 // ============================================================================
