@@ -284,6 +284,16 @@ describe('URL Hash Utilities', () => {
       window.location.hash = '#CC=U';
       expect(parseCountryCode()).toBeNull();
     });
+
+    it('returns null for numeric codes', () => {
+      window.location.hash = '#CC=12';
+      expect(parseCountryCode()).toBeNull();
+    });
+
+    it('returns null for mixed alphanumeric', () => {
+      window.location.hash = '#CC=U1';
+      expect(parseCountryCode()).toBeNull();
+    });
   });
 
   describe('updateCountryCode', () => {

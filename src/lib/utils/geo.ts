@@ -95,8 +95,10 @@ export const threeToTwo: Record<string, string> = Object.fromEntries(
 
 /**
  * Country centroids as fallback for GeoIP (lng, lat)
+ * Includes overseas territories for complete coverage
  */
 export const countryCentroids: Record<string, [number, number]> = {
+  // Countries A-Z
   'AD': [1.52, 42.55], 'AE': [53.85, 23.42], 'AF': [67.71, 33.94], 'AL': [20.17, 41.15],
   'AM': [45.04, 40.07], 'AO': [17.87, -11.20], 'AR': [-63.62, -38.42], 'AT': [14.55, 47.52],
   'AU': [133.78, -25.27], 'AZ': [47.58, 40.14], 'BA': [17.68, 43.92], 'BD': [90.36, 23.68],
@@ -114,7 +116,55 @@ export const countryCentroids: Record<string, [number, number]> = {
   'RO': [24.97, 45.94], 'RS': [21.01, 44.02], 'RU': [105.32, 61.52], 'SE': [18.64, 60.13],
   'SG': [103.82, 1.35], 'SI': [15.00, 46.15], 'SK': [19.70, 48.67], 'TH': [100.99, 15.87],
   'TR': [35.24, 38.96], 'TW': [120.96, 23.70], 'UA': [31.17, 48.38], 'US': [-95.71, 37.09],
-  'VN': [108.28, 14.06], 'ZA': [22.94, -30.56],
+  'VE': [-66.59, 6.42], 'VN': [108.28, 14.06], 'ZA': [22.94, -30.56],
+  // Additional countries in Americas
+  'BO': [-63.59, -16.29], // Bolivia
+  'CR': [-83.75, 9.75],   // Costa Rica
+  'CU': [-77.78, 21.52],  // Cuba
+  'DO': [-70.16, 18.74],  // Dominican Republic
+  'EC': [-78.18, -1.83],  // Ecuador
+  'GT': [-90.23, 15.78],  // Guatemala
+  'HN': [-86.24, 14.64],  // Honduras
+  'JM': [-77.30, 18.11],  // Jamaica
+  'NI': [-85.21, 12.87],  // Nicaragua
+  'PA': [-80.78, 8.54],   // Panama
+  'PE': [-75.02, -9.19],  // Peru
+  'PY': [-58.44, -23.44], // Paraguay
+  'SV': [-88.90, 13.79],  // El Salvador
+  'TT': [-61.22, 10.69],  // Trinidad and Tobago
+  'UY': [-55.77, -32.52], // Uruguay
+  // Additional African countries
+  'DZ': [1.66, 28.03],    // Algeria
+  'KE': [37.91, -0.02],   // Kenya
+  'MA': [-7.09, 31.79],   // Morocco
+  'NG': [8.68, 9.08],     // Nigeria
+  'TN': [9.54, 33.89],    // Tunisia
+  // Additional Asian countries
+  'IQ': [43.68, 33.22],   // Iraq
+  'LB': [35.86, 33.87],   // Lebanon
+  'PH': [121.77, 12.88],  // Philippines
+  'PK': [69.35, 30.38],   // Pakistan
+  'SA': [45.08, 23.89],   // Saudi Arabia
+  // Additional European countries
+  'CY': [33.43, 35.13],   // Cyprus
+  'MK': [21.75, 41.51],   // North Macedonia
+  'MT': [14.38, 35.94],   // Malta
+  // French overseas territories
+  'GF': [-53.13, 3.93],   // French Guiana
+  'GP': [-61.55, 16.25],  // Guadeloupe
+  'MQ': [-61.02, 14.64],  // Martinique
+  'RE': [55.54, -21.12],  // Réunion
+  'YT': [45.17, -12.83],  // Mayotte
+  'NC': [165.62, -21.26], // New Caledonia
+  'PF': [-149.41, -17.68],// French Polynesia
+  'PM': [-56.33, 46.88],  // Saint Pierre and Miquelon
+  'WF': [-176.20, -13.77],// Wallis and Futuna
+  // US territories
+  'PR': [-66.59, 18.22],  // Puerto Rico
+  'VI': [-64.90, 18.34],  // US Virgin Islands
+  'GU': [144.79, 13.44],  // Guam
+  'AS': [-170.13, -14.27],// American Samoa
+  'MP': [145.74, 15.18],  // Northern Mariana Islands
 };
 
 /**

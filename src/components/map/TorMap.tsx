@@ -131,9 +131,15 @@ export default function TorMap() {
   const prevDatesRef = useRef<string[]>([]);
 
   // Debounced URL updater for map location (300ms delay to avoid spamming during pan/zoom)
+  // Also clears CC (country code) since user is manually navigating away from that country
   const debouncedUpdateMapLocation = useMemo(
     () => debounce((lng: number, lat: number, zoom: number) => {
-      updateUrlHash('ML', formatMapLocation(lng, lat, zoom));
+      // Batch update: set ML and clear CC in one operation
+      // This avoids multiple replaceState calls and redundant hash parsing
+      updateUrlHash({
+        'ML': formatMapLocation(lng, lat, zoom),
+        'CC': null  // Clear country code when user manually pans/zooms
+      });
     }, 300),
     []
   );
@@ -143,8 +149,7 @@ export default function TorMap() {
     const newViewState = params.viewState as MapViewState;
     setViewState(newViewState);
     debouncedUpdateMapLocation(newViewState.longitude, newViewState.latitude, newViewState.zoom);
-    // Clear country code when user manually pans/zooms (they're no longer viewing that specific country)
-    updateCountryCode(null);
+    // CC clearing is now batched with ML update in debouncedUpdateMapLocation
   }, [debouncedUpdateMapLocation]);
 
   // Fetch index and return new date if found
@@ -230,21 +235,54 @@ export default function TorMap() {
           // Normalize country codes once on load
           // This avoids repeated complex lookups in the rendering loop
           if (geojson.features) {
+            // Territory mappings for regions with "-99" or missing ISO codes
+            // Maps territory name patterns to their ISO alpha-2 codes
+            const territoryMap: Record<string, string> = {
+              'french guiana': 'GF',
+              'guyane': 'GF',
+              'martinique': 'MQ',
+              'guadeloupe': 'GP',
+              'reunion': 'RE',
+              'réunion': 'RE',
+              'mayotte': 'YT',
+              'new caledonia': 'NC',
+              'french polynesia': 'PF',
+              'saint pierre': 'PM',
+              'wallis': 'WF',
+              'puerto rico': 'PR',
+              'guam': 'GU',
+              'u.s. virgin': 'VI',
+              'american samoa': 'AS',
+              'northern mariana': 'MP',
+            };
+            
             geojson.features.forEach((feature: any) => {
               const props = feature.properties || {};
-              // Try direct 2-letter codes
+              // Try direct 2-letter codes (skip invalid codes like "-99")
               let code = props.iso_a2 || props.ISO_A2 || props.cc2 || props['ISO3166-1-Alpha-2'];
               
-              // Fallback to 3-letter conversion
-              if (!code) {
+              // Validate: must be exactly 2 alphabetic characters
+              const isValidCode = code && /^[A-Za-z]{2}$/.test(code);
+              
+              if (!isValidCode) {
+                // Fallback to 3-letter conversion
                 const code3 = props.iso_a3 || props.ISO_A3 || props.adm0_a3 || props['ISO3166-1-Alpha-3'];
-                if (code3 && threeToTwo[code3.toUpperCase()]) {
+                if (code3 && /^[A-Za-z]{3}$/.test(code3) && threeToTwo[code3.toUpperCase()]) {
                   code = threeToTwo[code3.toUpperCase()];
+                } else {
+                  // Last resort: try to match territory by name
+                  const name = (props.name || props.NAME || props.admin || '').toLowerCase();
+                  for (const [pattern, territoryCode] of Object.entries(territoryMap)) {
+                    if (name.includes(pattern)) {
+                      code = territoryCode;
+                      break;
+                    }
+                  }
                 }
               }
               
-              // Standardize to iso_a2
-              if (code) {
+              // Standardize to iso_a2 (only if valid)
+              if (code && /^[A-Za-z]{2}$/.test(code)) {
                 feature.properties.iso_a2 = code.toUpperCase();
               }
             });

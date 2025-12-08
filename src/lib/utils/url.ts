@@ -162,8 +162,12 @@ export function formatMapLocation(longitude: number, latitude: number, zoom: num
   return `${longitude.toFixed(2)},${latitude.toFixed(2)},${zoom.toFixed(1)}`;
 }
 
+/** Regex to validate 2-letter country codes (ISO 3166-1 alpha-2) */
+const COUNTRY_CODE_REGEX = /^[A-Za-z]{2}$/;
+
 /**
  * Parse country code from URL hash (CC parameter)
+ * Validates that it's exactly 2 alphabetic characters
  * 
  * @example
  * // URL: https://example.com#date=2024-01-15&CC=US
@@ -171,7 +175,7 @@ export function formatMapLocation(longitude: number, latitude: number, zoom: num
  */
 export function parseCountryCode(): string | null {
   const cc = getUrlHashParam('CC');
-  if (!cc || cc.length !== 2) return null;
+  if (!cc || !COUNTRY_CODE_REGEX.test(cc)) return null;
   return cc.toUpperCase();
 }
 
