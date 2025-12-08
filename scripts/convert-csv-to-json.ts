@@ -56,7 +56,7 @@ function normalizeFingerprint(fp: string): string {
   return clean; // Return original if we can't fix it
 }
 
-// Mercator projection helper (copied from fetch-tor-data.ts)
+// Mercator projection helper (copied from fetch-all-data.ts)
 function getNormalizedPosition(lat: number, lng: number): { x: number; y: number } {
   const x = (lng + 180) / 360;
   const latRad = lat * (Math.PI / 180);

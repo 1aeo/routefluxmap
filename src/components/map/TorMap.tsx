@@ -448,7 +448,7 @@ export default function TorMap() {
           <p className="text-gray-400">Failed to load relay data</p>
           <p className="text-gray-500 text-sm mt-2">{error}</p>
           <p className="text-gray-600 text-xs mt-4">
-            Run: npx tsx scripts/fetch-tor-data.ts
+            Run: npm run fetch-data
           </p>
         </div>
       </div>

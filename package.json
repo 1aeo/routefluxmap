@@ -14,7 +14,6 @@
     "preview": "astro preview",
     "astro": "astro",
     "fetch-data": "tsx scripts/fetch-all-data.ts",
-    "fetch-historical": "tsx scripts/fetch-historical-data.ts",
     "convert-csv": "tsx scripts/convert-csv-to-json.ts",
     "upload": "tsx scripts/upload-to-storage.ts",
     "test": "vitest run",
