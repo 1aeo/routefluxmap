@@ -35,6 +35,10 @@ export class ParticleSystem {
   // Instead of creating 50k+ new objects every ~33ms, we reuse this array
   private positionCache: ParticleState[] = [];
   
+  // Pre-computed cumulative probability array for O(log n) binary search
+  // Instead of O(n) linear search for node selection
+  private cumulativeProbs: number[] = [];
+  
   constructor() {}
 
   /**
@@ -55,13 +59,29 @@ export class ParticleSystem {
 
     if (!nodes || nodes.length < 2) {
       this.particles = [];
+      this.cumulativeProbs = [];
       return;
     }
+
+    // Build cumulative probability array for O(log n) binary search
+    this.buildCumulativeProbs();
 
     this.particles = [];
     for (let i = 0; i < particleCount; i++) {
       this.particles.push(this.createParticle(i));
     }
+  }
+
+  /**
+   * Build cumulative probability array for binary search node selection.
+   * Called once during initialization - O(n) setup for O(log n) lookups.
+   */
+  private buildCumulativeProbs(): void {
+    let sum = 0;
+    this.cumulativeProbs = this.nodes.map(n => {
+      sum += n.normalized_bandwidth;
+      return sum;
+    });
   }
 
   /**
@@ -83,16 +103,34 @@ export class ParticleSystem {
   }
 
   /**
-   * Get probabilistic node index based on bandwidth
+   * Get probabilistic node index based on bandwidth using O(log n) binary search.
+   * 
+   * Uses pre-computed cumulative probability array for fast lookups.
+   * With 500+ nodes and 50k particles resetting continuously, this is
+   * called thousands of times per second - binary search provides 10-100x
+   * speedup over linear search.
    */
   private getProbabilisticIndex(): number {
-    let rnd = Math.random();
-    let i = 0;
-    while (i < this.nodes.length && rnd > this.nodes[i].normalized_bandwidth) {
-      rnd -= this.nodes[i].normalized_bandwidth;
-      i++;
+    if (this.cumulativeProbs.length === 0) return 0;
+    
+    // Scale random value to total probability mass
+    const total = this.cumulativeProbs[this.cumulativeProbs.length - 1];
+    const rnd = Math.random() * total;
+    
+    // Binary search for first index where cumulativeProbs[i] >= rnd
+    let left = 0;
+    let right = this.cumulativeProbs.length - 1;
+    
+    while (left < right) {
+      const mid = (left + right) >>> 1; // Faster than Math.floor for positive ints
+      if (this.cumulativeProbs[mid] < rnd) {
+        left = mid + 1;
+      } else {
+        right = mid;
+      }
     }
-    return Math.min(i, this.nodes.length - 1);
+    
+    return Math.min(left, this.nodes.length - 1);
   }
 
   /**
