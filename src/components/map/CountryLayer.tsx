@@ -46,7 +46,9 @@ export function createCountryLayer({
   onClick,
   onHover,
 }: CountryLayerOptions): GeoJsonLayer | null {
-  if (!geojson || !visible) return null;
+  // Return null only if there's no geojson data - but always create the layer
+  // even when not visible to keep geometry in GPU memory and avoid re-parsing lag
+  if (!geojson) return null;
   
   // Calculate max client count for normalization
   const counts = Object.values(countryData);
@@ -55,7 +57,8 @@ export function createCountryLayer({
   return new GeoJsonLayer({
     id: 'countries',
     data: geojson,
-    pickable: true,
+    visible, // Control visibility through Deck.gl's built-in prop for instant toggling
+    pickable: visible, // Only pickable when visible
     stroked: true,
     filled: true,
     extruded: false,
@@ -105,6 +108,7 @@ export function createCountryLayer({
     
     updateTriggers: {
       getFillColor: [countryData, maxCount],
+      visible: [visible],
     },
   });
 }

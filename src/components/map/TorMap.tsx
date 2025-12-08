@@ -360,6 +360,8 @@ export default function TorMap() {
     const result: any[] = [];
     
     // Country layer (rendered first, underneath relays)
+    // Always create and add the layer - visibility is controlled via Deck.gl's visible prop
+    // This keeps geometry in GPU memory and prevents re-parsing lag when toggling
     const countryLayer = createCountryLayer({
       countryData,
       geojson: countryGeojson,
