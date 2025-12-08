@@ -10,7 +10,8 @@ import { Map } from 'react-map-gl/maplibre';
 import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
-import { parseUrlHash } from '../../lib/utils/url';
+import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode, updateCountryCode } from '../../lib/utils/url';
+import { countryCentroids, threeToTwo } from '../../lib/utils/geo';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
 // Transition duration for relay dot fading
@@ -25,6 +26,7 @@ import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
+import LoadingBar from '../ui/LoadingBar';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import { useParticleLayer } from './ParticleOverlay';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -38,8 +40,41 @@ const INITIAL_VIEW_STATE: MapViewState = {
   bearing: 0,
 };
 
+// Default zoom level when centering on a country
+const COUNTRY_ZOOM = 5;
+
+// Get initial view state from URL or use defaults
+function getInitialViewState(): MapViewState {
+  if (typeof window === 'undefined') return INITIAL_VIEW_STATE;
+  
+  // First check for explicit map location (takes priority)
+  const mapLocation = parseMapLocation();
+  if (mapLocation) {
+    return {
+      ...INITIAL_VIEW_STATE,
+      longitude: mapLocation.longitude,
+      latitude: mapLocation.latitude,
+      zoom: mapLocation.zoom,
+    };
+  }
+  
+  // Then check for country code
+  const countryCode = parseCountryCode();
+  if (countryCode && countryCentroids[countryCode]) {
+    const [lng, lat] = countryCentroids[countryCode];
+    return {
+      ...INITIAL_VIEW_STATE,
+      longitude: lng,
+      latitude: lat,
+      zoom: COUNTRY_ZOOM,
+    };
+  }
+  
+  return INITIAL_VIEW_STATE;
+}
+
 export default function TorMap() {
-  const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
+  const [viewState, setViewState] = useState<MapViewState>(getInitialViewState);
   const [relayData, setRelayData] = useState<RelayData | null>(null);
   const [dateIndex, setDateIndex] = useState<DateIndex | null>(null);
   const [currentDate, setCurrentDate] = useState<string | null>(null);
@@ -94,6 +129,28 @@ export default function TorMap() {
   
   // Track previously known dates to detect new ones
   const prevDatesRef = useRef<string[]>([]);
+
+  // Debounced URL updater for map location (300ms delay to avoid spamming during pan/zoom)
+  // Also clears CC (country code) since user is manually navigating away from that country
+  const debouncedUpdateMapLocation = useMemo(
+    () => debounce((lng: number, lat: number, zoom: number) => {
+      // Batch update: set ML and clear CC in one operation
+      // This avoids multiple replaceState calls and redundant hash parsing
+      updateUrlHash({
+        'ML': formatMapLocation(lng, lat, zoom),
+        'CC': null  // Clear country code when user manually pans/zooms
+      });
+    }, 300),
+    []
+  );
+
+  // Handle view state change with URL persistence
+  const handleViewStateChange = useCallback((params: any) => {
+    const newViewState = params.viewState as MapViewState;
+    setViewState(newViewState);
+    debouncedUpdateMapLocation(newViewState.longitude, newViewState.latitude, newViewState.zoom);
+    // CC clearing is now batched with ML update in debouncedUpdateMapLocation
+  }, [debouncedUpdateMapLocation]);
 
   // Fetch index and return new date if found
   const fetchIndexData = useCallback(async (): Promise<string | null> => {
@@ -174,6 +231,63 @@ export default function TorMap() {
         
         if (response.ok) {
           const geojson = await response.json();
+          
+          // Normalize country codes once on load
+          // This avoids repeated complex lookups in the rendering loop
+          if (geojson.features) {
+            // Territory mappings for regions with "-99" or missing ISO codes
+            // Maps territory name patterns to their ISO alpha-2 codes
+            const territoryMap: Record<string, string> = {
+              'french guiana': 'GF',
+              'guyane': 'GF',
+              'martinique': 'MQ',
+              'guadeloupe': 'GP',
+              'reunion': 'RE',
+              'réunion': 'RE',
+              'mayotte': 'YT',
+              'new caledonia': 'NC',
+              'french polynesia': 'PF',
+              'saint pierre': 'PM',
+              'wallis': 'WF',
+              'puerto rico': 'PR',
+              'guam': 'GU',
+              'u.s. virgin': 'VI',
+              'american samoa': 'AS',
+              'northern mariana': 'MP',
+            };
+            
+            geojson.features.forEach((feature: any) => {
+              const props = feature.properties || {};
+              // Try direct 2-letter codes (skip invalid codes like "-99")
+              let code = props.iso_a2 || props.ISO_A2 || props.cc2 || props['ISO3166-1-Alpha-2'];
+              
+              // Validate: must be exactly 2 alphabetic characters
+              const isValidCode = code && /^[A-Za-z]{2}$/.test(code);
+              
+              if (!isValidCode) {
+                // Fallback to 3-letter conversion
+                const code3 = props.iso_a3 || props.ISO_A3 || props.adm0_a3 || props['ISO3166-1-Alpha-3'];
+                if (code3 && /^[A-Za-z]{3}$/.test(code3) && threeToTwo[code3.toUpperCase()]) {
+                  code = threeToTwo[code3.toUpperCase()];
+                } else {
+                  // Last resort: try to match territory by name
+                  const name = (props.name || props.NAME || props.admin || '').toLowerCase();
+                  for (const [pattern, territoryCode] of Object.entries(territoryMap)) {
+                    if (name.includes(pattern)) {
+                      code = territoryCode;
+                      break;
+                    }
+                  }
+                }
+              }
+              
+              // Standardize to iso_a2 (only if valid)
+              if (code && /^[A-Za-z]{2}$/.test(code)) {
+                feature.properties.iso_a2 = code.toUpperCase();
+              }
+            });
+          }
+          
           setCountryGeojson(geojson);
         }
       } catch (err) {
@@ -304,7 +418,8 @@ export default function TorMap() {
     }
   }, []);
 
-  // Handle hover
+  // Handle hover - throttled to reduce picking overhead during particle animation
+  // Deck.gl's picking causes GPU readback on every mouse move, which blocks animation
   const handleHover = useCallback((info: PickingInfo) => {
     if (info.object) {
       setHoverInfo({
@@ -323,7 +438,7 @@ export default function TorMap() {
     setPopupPosition(null);
   }, []);
 
-  // Handle country hover
+  // Handle country hover - also throttled for consistency
   const handleCountryHover = useCallback((code: string | null, x: number, y: number) => {
     if (code) {
       setCountryHover({ code, x, y });
@@ -332,10 +447,26 @@ export default function TorMap() {
     }
   }, []);
 
-  // Handle country click
+  // Handle country click - center on country and update URL
   const handleCountryClick = useCallback((code: string, name: string) => {
-    console.log(`Country clicked: ${name} (${code})`);
-    // TODO: Show country statistics popup
+    const centroid = countryCentroids[code];
+    if (centroid) {
+      const [lng, lat] = centroid;
+      setViewState(prev => ({
+        ...prev,
+        longitude: lng,
+        latitude: lat,
+        zoom: COUNTRY_ZOOM,
+      }));
+      
+      // Update URL with country code and map location in one batch
+      // This prevents multiple history entries/thrashing
+      updateUrlHash({
+        'CC': code,
+        'ML': formatMapLocation(lng, lat, COUNTRY_ZOOM)
+      });
+    }
+    // TODO: Show country statistics popup (outlier chart)
   }, []);
 
   // Check if we have actual relay nodes to display
@@ -359,7 +490,7 @@ export default function TorMap() {
   }), [viewState.zoom]);
 
   // Particle layer - smaller dots with opacity (only if we have relay nodes)
-  const particleLayers = useParticleLayer({
+  const { layers: particleLayers, progress: particleProgress, isGenerating: isGeneratingParticles } = useParticleLayer({
     nodes: relayData?.nodes ?? [],
     visible: layerVisibility.particles && hasRelayNodes,
     particleCount,
@@ -469,10 +600,12 @@ export default function TorMap() {
     <div className="relative w-full h-full">
       <DeckGL
         viewState={viewState}
-        onViewStateChange={({ viewState }) => setViewState(viewState as MapViewState)}
+        onViewStateChange={handleViewStateChange}
         controller={true}
         layers={layers}
-        getCursor={({ isHovering }) => isHovering ? 'pointer' : 'grab'}
+        // Use our throttled hover state for cursor instead of Deck.gl's internal picking
+        // This avoids the expensive isHovering check on every mouse move
+        getCursor={() => hoverInfo ? 'pointer' : 'grab'}
       >
         <Map
           mapStyle={config.mapStyle}
@@ -482,6 +615,11 @@ export default function TorMap() {
 
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
+      
+      {/* Particle generation progress */}
+      {isGeneratingParticles && particleProgress !== null && (
+        <LoadingBar progress={particleProgress} label="Generating particles" />
+      )}
       
       {/* No relay data toast - shown when data was fetched but has no nodes, or no dates available */}
       {!loading && !initialLoading && (

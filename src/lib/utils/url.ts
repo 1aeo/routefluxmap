@@ -27,25 +27,34 @@ export function parseUrlHash(): Record<string, string> {
 }
 
 /**
- * Update a single parameter in the URL hash without affecting others
- *
- * @param key - The parameter key to update
- * @param value - The new value (empty string removes the parameter)
- *
+ * Update one or more parameters in the URL hash
+ * 
+ * @param updates - Record of key-value pairs to update. Value of null/empty string removes the key.
+ * 
  * @example
- * // Current URL: https://example.com#date=2024-01-15
- * updateUrlHash('zoom', '5')
- * // Result: https://example.com#date=2024-01-15&zoom=5
+ * updateUrlHash({ zoom: '5', date: '2024-01-01' })
  */
-export function updateUrlHash(key: string, value: string): void {
+export function updateUrlHash(updates: Record<string, string | null> | string, value?: string): void {
   if (typeof window === 'undefined') return;
 
   const params = parseUrlHash();
 
-  if (value) {
-    params[key] = value;
+  if (typeof updates === 'string') {
+    // Single key-value update
+    if (value) {
+      params[updates] = value;
+    } else {
+      delete params[updates];
+    }
   } else {
-    delete params[key];
+    // Batch update
+    Object.entries(updates).forEach(([key, val]) => {
+      if (val) {
+        params[key] = val;
+      } else {
+        delete params[key];
+      }
+    });
   }
 
   const hashString = Object.entries(params)
@@ -97,3 +106,83 @@ export function clearUrlHash(): void {
   );
 }
 
+/**
+ * Create a debounced function that delays invoking func until after wait ms
+ * have elapsed since the last time it was invoked.
+ */
+export function debounce<T extends (...args: any[]) => void>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  return (...args: Parameters<T>) => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(() => {
+      func(...args);
+      timeoutId = null;
+    }, wait);
+  };
+}
+
+/**
+ * Parse map location from URL hash (ML parameter)
+ * Format: ML=longitude,latitude,zoom
+ * 
+ * @example
+ * // URL: https://example.com#date=2024-01-15&ML=-40.5,30.2,4
+ * parseMapLocation() // { longitude: -40.5, latitude: 30.2, zoom: 4 }
+ */
+export function parseMapLocation(): { longitude: number; latitude: number; zoom: number } | null {
+  const ml = getUrlHashParam('ML');
+  if (!ml) return null;
+
+  const parts = ml.split(',').map(parseFloat);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+
+  const [longitude, latitude, zoom] = parts;
+  
+  // Validate ranges
+  if (longitude < -180 || longitude > 180) return null;
+  if (latitude < -90 || latitude > 90) return null;
+  if (zoom < 0 || zoom > 22) return null;
+
+  return { longitude, latitude, zoom };
+}
+
+/**
+ * Format map location for URL hash
+ * 
+ * @example
+ * formatMapLocation(-40.5, 30.2, 4) // '-40.50,30.20,4.0'
+ */
+export function formatMapLocation(longitude: number, latitude: number, zoom: number): string {
+  return `${longitude.toFixed(2)},${latitude.toFixed(2)},${zoom.toFixed(1)}`;
+}
+
+/** Regex to validate 2-letter country codes (ISO 3166-1 alpha-2) */
+const COUNTRY_CODE_REGEX = /^[A-Za-z]{2}$/;
+
+/**
+ * Parse country code from URL hash (CC parameter)
+ * Validates that it's exactly 2 alphabetic characters
+ * 
+ * @example
+ * // URL: https://example.com#date=2024-01-15&CC=US
+ * parseCountryCode() // 'US'
+ */
+export function parseCountryCode(): string | null {
+  const cc = getUrlHashParam('CC');
+  if (!cc || !COUNTRY_CODE_REGEX.test(cc)) return null;
+  return cc.toUpperCase();
+}
+
+/**
+ * Update country code in URL hash
+ * Pass null or empty string to remove
+ */
+export function updateCountryCode(code: string | null): void {
+  updateUrlHash('CC', code?.toUpperCase() || '');
+}
