@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { DateIndex } from '../../lib/types';
+import { formatDateShort, formatMonth, formatMonthYear, formatYear } from '../../lib/utils/format';
 
 interface DateSliderChartProps {
   dateIndex: DateIndex;
@@ -50,39 +51,6 @@ function formatBandwidth(gbits: number): string {
   return `${gbits.toFixed(0)} Gbps`;
 }
 
-// Format date for display
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
-// Format month for display
-function formatMonth(monthKey: string): string {
-  const [year, month] = monthKey.split('-');
-  const date = new Date(parseInt(year), parseInt(month) - 1, 1);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    year: 'numeric',
-  });
-}
-
-// Format year for display
-function formatYear(yearKey: string): string {
-  return yearKey;
-}
-
-// Format date for short display
-function formatDateShort(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    year: 'numeric',
-  });
-}
 
 // Get month key from date string
 function getMonthKey(dateStr: string): string {
@@ -234,7 +202,7 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
       // Use days
       data = dates.map((date, i) => ({
         key: date,
-        label: formatDate(date),
+        label: formatDateShort(date),
         bandwidth: bandwidths[i] || 0,
         dates: [date],
         startDate: date,
@@ -371,13 +339,13 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
   
   // Get range labels
   const startLabel = mode === 'days' 
-    ? formatDateShort(dates[0])
+    ? formatMonthYear(dates[0])
     : mode === 'months'
     ? formatMonth(aggregatedData[0]?.key || '')
     : aggregatedData[0]?.key || '';
     
   const endLabel = mode === 'days'
-    ? formatDateShort(dates[dates.length - 1])
+    ? formatMonthYear(dates[dates.length - 1])
     : mode === 'months'
     ? formatMonth(aggregatedData[aggregatedData.length - 1]?.key || '')
     : aggregatedData[aggregatedData.length - 1]?.key || '';
@@ -493,7 +461,7 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
       <div className="flex items-center justify-between mt-2 px-1">
         <span className="text-[10px] text-gray-500 w-16">{startLabel}</span>
         <div className="text-center flex-1 min-w-0">
-          <div className="text-tor-green text-sm font-medium truncate">{formatDate(currentDate)}</div>
+          <div className="text-tor-green text-sm font-medium truncate">{formatDateShort(currentDate)}</div>
           <div className="text-gray-500 text-xs whitespace-nowrap">
             <span className="text-gray-600">Network Bandwidth: </span>
             {formatBandwidth(currentBandwidth)}

@@ -5,6 +5,9 @@ import {
   formatBandwidth, 
   formatDate, 
   formatDateShort,
+  formatMonth,
+  formatMonthYear,
+  formatYear,
   parseDateFromUrl 
 } from '../../src/lib/utils/format';
 
@@ -102,3 +105,33 @@ describe('parseDateFromUrl', () => {
   });
 });
 
+describe('formatMonth', () => {
+  it('formats YYYY-MM to month year', () => {
+    const result = formatMonth('2024-12');
+    expect(result).toContain('Dec');
+    expect(result).toContain('2024');
+  });
+
+  it('handles single digit months', () => {
+    const result = formatMonth('2024-01');
+    expect(result).toContain('Jan');
+    expect(result).toContain('2024');
+  });
+});
+
+describe('formatMonthYear', () => {
+  it('formats full date to month year only', () => {
+    const result = formatMonthYear('2024-12-15');
+    expect(result).toContain('Dec');
+    expect(result).toContain('2024');
+    // Should NOT contain the day
+    expect(result).not.toContain('15');
+  });
+});
+
+describe('formatYear', () => {
+  it('returns year as-is', () => {
+    expect(formatYear('2024')).toBe('2024');
+    expect(formatYear('2023')).toBe('2023');
+  });
+});
