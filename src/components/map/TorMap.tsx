@@ -60,9 +60,9 @@ export default function TorMap() {
   
   // Particle settings
   const [particleCount, setParticleCount] = useState(50000); // Start with lower count for performance
-  const [lineDensityFactor, setLineDensityFactor] = useState(4.0);
-  const [lineOpacityFactor, setLineOpacityFactor] = useState(4.0);
-  const [lineSpeedFactor, setLineSpeedFactor] = useState(2.0); // 200% of original speed
+  const [lineDensityFactor, setLineDensityFactor] = useState(1.0);
+  const [lineOpacityFactor, setLineOpacityFactor] = useState(1.0);
+  const [lineSpeedFactor, setLineSpeedFactor] = useState(1.0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0); // 1x playback speed for date animation
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
