@@ -28,7 +28,7 @@ import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
 import LoadingBar from '../ui/LoadingBar';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
-import { useParticleLayer } from './ParticleOverlay';
+import ParticleCanvas from './ParticleCanvas';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 
@@ -118,17 +118,32 @@ export default function TorMap() {
     }
     // Clear country hover if countries are hidden
     if (!newVisibility.countries) {
-      setCountryHover(null);
+      countryHoverRef.current = null;
+      if (countryTooltipRef.current) {
+        countryTooltipRef.current.style.opacity = '0';
+      }
     }
   }, []);
   
   // Country data state
   const [countryData, setCountryData] = useState<CountryHistogram>({});
   const [countryGeojson, setCountryGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [countryHover, setCountryHover] = useState<{ code: string; x: number; y: number } | null>(null);
+  
+  // Country hover state - using ref to avoid re-renders for tooltip movement
+  const countryHoverRef = useRef<{ code: string; x: number; y: number } | null>(null);
+  const countryHover = countryHoverRef.current; // compatibility
+
   
   // Track previously known dates to detect new ones
   const prevDatesRef = useRef<string[]>([]);
+
+  // Ref for the interactive map container (DOM throttling removed)
+  const interactiveContainerRef = useRef<HTMLDivElement>(null);
+
+  // NOTE: DOM event throttling removed.
+  // With Worker particles + Optimized Tooltips (no-mount), the performance impact 
+  // of 60fps picking is negligible, and throttling caused "stuck" tooltips 
+  // because the "exit" events were being dropped.
 
   // Debounced URL updater for map location (300ms delay to avoid spamming during pan/zoom)
   // Also clears CC (country code) since user is manually navigating away from that country
@@ -238,6 +253,8 @@ export default function TorMap() {
             // Territory mappings for regions with "-99" or missing ISO codes
             // Maps territory name patterns to their ISO alpha-2 codes
             const territoryMap: Record<string, string> = {
+              'france': 'FR',
+              'norway': 'NO',
               'french guiana': 'GF',
               'guyane': 'GF',
               'martinique': 'MQ',
@@ -265,9 +282,21 @@ export default function TorMap() {
               const isValidCode = code && /^[A-Za-z]{2}$/.test(code);
               
               if (!isValidCode) {
-                // Fallback to 3-letter conversion
-                const code3 = props.iso_a3 || props.ISO_A3 || props.adm0_a3 || props['ISO3166-1-Alpha-3'];
-                if (code3 && /^[A-Za-z]{3}$/.test(code3) && threeToTwo[code3.toUpperCase()]) {
+                // Fallback to 3-letter conversion (iterate all possible keys to find a valid alpha-3 code)
+                // This handles cases where iso_a3 might be "-99" but adm0_a3 is "FRA"
+                const candidates3 = [
+                  props.iso_a3,
+                  props.ISO_A3,
+                  props.adm0_a3,
+                  props['ISO3166-1-Alpha-3'],
+                  props.sov_a3,
+                  props.gu_a3,
+                  props.su_a3
+                ];
+                
+                const code3 = candidates3.find(c => c && typeof c === 'string' && /^[A-Za-z]{3}$/.test(c));
+                
+                if (code3 && threeToTwo[code3.toUpperCase()]) {
                   code = threeToTwo[code3.toUpperCase()];
                 } else {
                   // Last resort: try to match territory by name
@@ -420,17 +449,32 @@ export default function TorMap() {
 
   // Handle hover - throttled to reduce picking overhead during particle animation
   // Deck.gl's picking causes GPU readback on every mouse move, which blocks animation
+  // Optimized: Using refs to update DOM directly instead of React state for smoother tooltips
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const countryTooltipRef = useRef<HTMLDivElement>(null);
+  
   const handleHover = useCallback((info: PickingInfo) => {
     if (info.object) {
-      setHoverInfo({
-        node: info.object as AggregatedNode,
-        x: info.x,
-        y: info.y,
-      });
+      const node = info.object as AggregatedNode;
+      // Only trigger re-render if the NODE changes
+      if (!hoverInfo || hoverInfo.node !== node) {
+        setHoverInfo({
+          node,
+          x: info.x,
+          y: info.y,
+        });
+      } else if (tooltipRef.current) {
+        // Manually update position without re-render
+        tooltipRef.current.style.left = `${info.x + 10}px`;
+        tooltipRef.current.style.top = `${info.y + 10}px`;
+      }
     } else {
-      setHoverInfo(null);
+      // Only clear if we were previously hovering
+      if (hoverInfo) {
+        setHoverInfo(null);
+      }
     }
-  }, []);
+  }, [hoverInfo]);
 
   // Close popup
   const handleClosePopup = useCallback(() => {
@@ -438,14 +482,33 @@ export default function TorMap() {
     setPopupPosition(null);
   }, []);
 
-  // Handle country hover - also throttled for consistency
+  // Handle country hover - completely ref-based for zero lag
   const handleCountryHover = useCallback((code: string | null, x: number, y: number) => {
     if (code) {
-      setCountryHover({ code, x, y });
+      countryHoverRef.current = { code, x, y };
+      
+      if (countryTooltipRef.current) {
+        // Update content directly in DOM to avoid React render cycle
+        // Note: We need specific class names in CountryTooltip to target elements
+        const nameEl = countryTooltipRef.current.querySelector('.country-name');
+        const countEl = countryTooltipRef.current.querySelector('.country-count');
+        const count = countryData[code] || 0;
+        
+        if (nameEl) nameEl.textContent = code;
+        if (countEl) countEl.textContent = `${count.toLocaleString()} clients`;
+        
+        // Update position and show
+        countryTooltipRef.current.style.left = `${x + 10}px`;
+        countryTooltipRef.current.style.top = `${y + 10}px`;
+        countryTooltipRef.current.style.opacity = '1';
+      }
     } else {
-      setCountryHover(null);
+      countryHoverRef.current = null;
+      if (countryTooltipRef.current) {
+        countryTooltipRef.current.style.opacity = '0';
+      }
     }
-  }, []);
+  }, [countryData]);
 
   // Handle country click - center on country and update URL
   const handleCountryClick = useCallback((code: string, name: string) => {
@@ -469,6 +532,16 @@ export default function TorMap() {
     // TODO: Show country statistics popup (outlier chart)
   }, []);
 
+  // Cleanup country tooltip when layer is disabled
+  useEffect(() => {
+    if (!layerVisibility.countries) {
+      countryHoverRef.current = null;
+      if (countryTooltipRef.current) {
+        countryTooltipRef.current.style.opacity = '0';
+      }
+    }
+  }, [layerVisibility.countries]);
+
   // Check if we have actual relay nodes to display
   const hasRelayNodes = !!(relayData && relayData.nodes && relayData.nodes.length > 0);
   
@@ -489,7 +562,8 @@ export default function TorMap() {
     ...getZoomPixelConstraints(viewState.zoom),
   }), [viewState.zoom]);
 
-  // Particle layer - smaller dots with opacity (only if we have relay nodes)
+  // OLD: Particle layer - smaller dots with opacity (only if we have relay nodes)
+  /*
   const { layers: particleLayers, progress: particleProgress, isGenerating: isGeneratingParticles } = useParticleLayer({
     nodes: relayData?.nodes ?? [],
     visible: layerVisibility.particles && hasRelayNodes,
@@ -502,6 +576,7 @@ export default function TorMap() {
     lineDensityFactor,
     lineOpacityFactor,
   });
+  */
 
   // Create static layers (without particles to avoid re-render loops)
   const baseLayers = useMemo(() => {
@@ -566,7 +641,8 @@ export default function TorMap() {
   }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
 
   // Combine base layers with particle layer (particle layer updates independently)
-  const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
+  // const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
+  const layers = baseLayers;
 
   // Initial Loading state (only shown on first load)
   if (initialLoading && !relayData) {
@@ -597,7 +673,7 @@ export default function TorMap() {
   }
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full" ref={interactiveContainerRef}>
       <DeckGL
         viewState={viewState}
         onViewStateChange={handleViewStateChange}
@@ -606,6 +682,7 @@ export default function TorMap() {
         // Use our throttled hover state for cursor instead of Deck.gl's internal picking
         // This avoids the expensive isHovering check on every mouse move
         getCursor={() => hoverInfo ? 'pointer' : 'grab'}
+        style={{ zIndex: '1' }} // Ensure map is below UI but handles interaction
       >
         <Map
           mapStyle={config.mapStyle}
@@ -613,13 +690,24 @@ export default function TorMap() {
         />
       </DeckGL>
 
+      {/* Offscreen Particle Canvas (Rendered independently via Worker) */}
+      <ParticleCanvas
+        nodes={relayData?.nodes ?? []}
+        viewState={viewState}
+        width={typeof window !== 'undefined' ? window.innerWidth : 800}
+        height={typeof window !== 'undefined' ? window.innerHeight : 600}
+        visible={layerVisibility.particles && hasRelayNodes}
+      />
+
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
       
-      {/* Particle generation progress */}
+      {/* Particle generation progress (disabled for now as worker handles it silently) */}
+      {/* 
       {isGeneratingParticles && particleProgress !== null && (
         <LoadingBar progress={particleProgress} label="Generating particles" />
       )}
+      */}
       
       {/* No relay data toast - shown when data was fetched but has no nodes, or no dates available */}
       {!loading && !initialLoading && (
@@ -630,21 +718,25 @@ export default function TorMap() {
         ) : null
       )}
 
-      {/* Hover tooltip */}
-      {hoverInfo && !selectedNode && (
-        <div
-          className="absolute pointer-events-none bg-black/40 backdrop-blur-md text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-tor-green/30 z-10"
-          style={{
-            left: hoverInfo.x + 10,
-            top: hoverInfo.y + 10,
-          }}
-        >
-          <div className="font-medium text-tor-green">{hoverInfo.node.label}</div>
-          <div className="text-gray-400 text-xs">
-            {hoverInfo.node.relays.length} relay{hoverInfo.node.relays.length !== 1 ? 's' : ''}
-          </div>
-        </div>
-      )}
+      {/* Hover tooltip - Always rendered but hidden when not active to prevent mounting lag */}
+      <div
+        ref={tooltipRef}
+        className="absolute pointer-events-none bg-black/40 backdrop-blur-md text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-tor-green/30 z-10 transition-opacity duration-75"
+        style={{
+          left: 0,
+          top: 0,
+          opacity: (hoverInfo && !selectedNode) ? 1 : 0,
+        }}
+      >
+        {hoverInfo && (
+          <>
+            <div className="font-medium text-tor-green">{hoverInfo.node.label}</div>
+            <div className="text-gray-400 text-xs">
+              {hoverInfo.node.relays.length} relay{hoverInfo.node.relays.length !== 1 ? 's' : ''}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Relay popup */}
       {selectedNode && popupPosition && (
@@ -656,15 +748,19 @@ export default function TorMap() {
         />
       )}
 
-      {/* Country hover tooltip */}
-      {countryHover && layerVisibility.countries && (
-        <CountryTooltip
-          countryCode={countryHover.code}
-          countryData={countryData}
-          x={countryHover.x}
-          y={countryHover.y}
-        />
-      )}
+      {/* Country hover tooltip - Always rendered but hidden when not active */}
+      <CountryTooltip
+        ref={countryTooltipRef}
+        countryCode=""
+        countryData={countryData}
+        x={0}
+        y={0}
+        style={{
+          opacity: 0,
+          pointerEvents: 'none',
+          zIndex: 60
+        }}
+      />
 
       {/* Header + Layer Controls - top left */}
       <div className="absolute top-4 left-4 z-10">
