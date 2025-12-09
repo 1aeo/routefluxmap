@@ -29,6 +29,7 @@ import NoDataToast from '../ui/NoDataToast';
 import LoadingBar from '../ui/LoadingBar';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import ParticleCanvas from './ParticleCanvas';
+import SettingsPanel from './SettingsPanel';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 
@@ -95,9 +96,9 @@ export default function TorMap() {
   
   // Particle settings
   const [particleCount, setParticleCount] = useState(50000); // Start with lower count for performance
-  const [lineDensityFactor, setLineDensityFactor] = useState(1.0);
-  const [lineOpacityFactor, setLineOpacityFactor] = useState(1.0);
-  const [lineSpeedFactor, setLineSpeedFactor] = useState(1.0);
+  const [lineDensityFactor, setLineDensityFactor] = useState(0.5);
+  const [lineOpacityFactor, setLineOpacityFactor] = useState(0.5);
+  const [lineSpeedFactor, setLineSpeedFactor] = useState(0.5);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0); // 1x playback speed for date animation
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
@@ -697,6 +698,10 @@ export default function TorMap() {
         width={typeof window !== 'undefined' ? window.innerWidth : 800}
         height={typeof window !== 'undefined' ? window.innerHeight : 600}
         visible={layerVisibility.particles && hasRelayNodes}
+        density={lineDensityFactor}
+        opacity={lineOpacityFactor}
+        speed={lineSpeedFactor}
+        trafficType={trafficType}
       />
 
       {/* Update notification */}
@@ -894,125 +899,19 @@ export default function TorMap() {
         </button>
 
         {/* Settings Panel (Popup) */}
-        {showSettings && (
-          <div className="absolute bottom-0 left-10 ml-2 bg-black/80 backdrop-blur-md rounded-lg p-3 border border-tor-green/20 w-48 shadow-lg animate-fade-in">
-            
-            {/* Traffic Type Section */}
-            <h3 className="text-tor-green text-xs font-bold mb-3 uppercase tracking-wider">Traffic Type</h3>
-            <div className="flex gap-1 mb-3">
-              <button
-                onClick={() => setTrafficType('all')}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
-                  trafficType === 'all'
-                    ? 'bg-cyan-500 text-black'
-                    : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                }`}
-              >
-                All
-              </button>
-              <button
-                onClick={() => setTrafficType('general')}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
-                  trafficType === 'general'
-                    ? 'bg-tor-green text-black'
-                    : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                }`}
-              >
-                <span className="flex items-center justify-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-[#00ff88]" />
-                  General
-                </span>
-              </button>
-              <button
-                onClick={() => setTrafficType('hidden')}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
-                  trafficType === 'hidden'
-                    ? 'bg-tor-orange text-black'
-                    : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                }`}
-              >
-                <span className="flex items-center justify-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-[#ff6600]" />
-                  Hidden
-                </span>
-              </button>
-            </div>
-
-            {/* Line Settings Section */}
-            <h3 className="text-tor-green text-xs font-bold mb-3 mt-4 pt-3 border-t border-white/10 uppercase tracking-wider">Line Settings</h3>
-            
-            {/* Density Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Density</span>
-                <span>{(lineDensityFactor * 100).toFixed(0)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="6.0"
-                step="0.1"
-                value={lineDensityFactor}
-                onChange={(e) => setLineDensityFactor(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-
-            {/* Opacity Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Opacity</span>
-                <span>{(lineOpacityFactor * 100).toFixed(0)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="6.0"
-                step="0.1"
-                value={lineOpacityFactor}
-                onChange={(e) => setLineOpacityFactor(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-
-            {/* Speed Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Speed</span>
-                <span>{(lineSpeedFactor * 100).toFixed(0)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="5.0"
-                step="0.1"
-                value={lineSpeedFactor}
-                onChange={(e) => setLineSpeedFactor(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-
-            {/* Playback Section */}
-            <h3 className="text-tor-green text-xs font-bold mb-3 mt-4 pt-3 border-t border-white/10 uppercase tracking-wider">Playback</h3>
-            
-            {/* Playback Speed Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Speed</span>
-                <span>{playbackSpeed}x</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="4"
-                step="0.1"
-                value={playbackSpeed}
-                onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-          </div>
-        )}
+        <SettingsPanel
+          show={showSettings}
+          trafficType={trafficType}
+          setTrafficType={setTrafficType}
+          density={lineDensityFactor}
+          setDensity={setLineDensityFactor}
+          opacity={lineOpacityFactor}
+          setOpacity={setLineOpacityFactor}
+          speed={lineSpeedFactor}
+          setSpeed={setLineSpeedFactor}
+          playbackSpeed={playbackSpeed}
+          setPlaybackSpeed={setPlaybackSpeed}
+        />
 
         <button
           onClick={() => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }))}

@@ -97,7 +97,7 @@ export default function LayerControls({
         />
         {showParticles && (
           <Toggle
-            label="Particles"
+            label="Traffic Flow"
             icon={
               <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                 <circle cx="6" cy="6" r="2" />
@@ -191,7 +191,7 @@ export default function LayerControls({
           {/* Particles layer - only if enabled */}
           {showParticles && (
             <Toggle
-              label="Particles"
+              label="Traffic Flow"
               icon={
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                   <circle cx="6" cy="6" r="2" />
@@ -227,7 +227,7 @@ export default function LayerControls({
           {showParticles && (
             <div 
               className={`w-2 h-2 rounded-full ${visibility.particles ? 'bg-tor-green' : 'bg-gray-600'}`}
-              title="Particles"
+              title="Traffic Flow"
             />
           )}
         </div>

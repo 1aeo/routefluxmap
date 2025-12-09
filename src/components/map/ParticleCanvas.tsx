@@ -8,6 +8,10 @@ interface ParticleCanvasProps {
   width: number;
   height: number;
   visible: boolean;
+  density?: number;
+  opacity?: number;
+  speed?: number;
+  trafficType?: 'all' | 'hidden' | 'general';
 }
 
 export default function ParticleCanvas({
@@ -15,7 +19,11 @@ export default function ParticleCanvas({
   viewState,
   width,
   height,
-  visible
+  visible,
+  density = 1.0,
+  opacity = 1.0,
+  speed = 1.0,
+  trafficType = 'all'
 }: ParticleCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -53,7 +61,12 @@ export default function ParticleCanvas({
     
     workerRef.current.postMessage({
       type: 'updateNodes',
-      nodes: nodes.map(n => ({ lng: n.lng, lat: n.lat, normalized_bandwidth: n.normalized_bandwidth }))
+      nodes: nodes.map(n => ({ 
+        lng: n.lng, 
+        lat: n.lat, 
+        normalized_bandwidth: n.normalized_bandwidth,
+        isHSDir: n.relays.some(r => r.flags.includes('H')) // Check for HSDir flag
+      }))
     });
   }, [nodes]);
 
@@ -85,6 +98,19 @@ export default function ParticleCanvas({
       pixelRatio: window.devicePixelRatio
     });
   }, [width, height]);
+
+  // Update Settings (Density, Opacity, Speed, Traffic Type)
+  useEffect(() => {
+    if (!workerRef.current) return;
+    
+    workerRef.current.postMessage({
+      type: 'updateSettings',
+      density,
+      opacity,
+      speed,
+      trafficType
+    });
+  }, [density, opacity, speed, trafficType]);
 
   return (
     <canvas
