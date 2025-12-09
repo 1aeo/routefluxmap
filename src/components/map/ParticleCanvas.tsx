@@ -65,7 +65,8 @@ export default function ParticleCanvas({
         lng: n.lng, 
         lat: n.lat, 
         normalized_bandwidth: n.normalized_bandwidth,
-        isHSDir: n.relays.some(r => r.flags.includes('H')) // Check for HSDir flag
+        // Use pre-calculated flag if available, otherwise fallback to iteration (for old data compatibility)
+        isHSDir: n.isHSDir ?? n.relays.some(r => r.flags.includes('H'))
       }))
     });
   }, [nodes]);

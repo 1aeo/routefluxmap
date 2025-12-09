@@ -27,6 +27,7 @@ import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
 import LoadingBar from '../ui/LoadingBar';
+import StartupOverlay from '../ui/StartupOverlay';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import ParticleCanvas from './ParticleCanvas';
 import SettingsPanel from './SettingsPanel';
@@ -86,6 +87,9 @@ export default function TorMap() {
   const [selectedCountryName, setSelectedCountryName] = useState<string | null>(null);
   const [popupPosition, setPopupPosition] = useState<{ x: number; y: number } | null>(null);
   const [hoverInfo, setHoverInfo] = useState<{ node: AggregatedNode; x: number; y: number } | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState<string>('Initializing...');
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
+  const [mapLoaded, setMapLoaded] = useState(false);
   
   // Layer visibility state
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
@@ -172,6 +176,8 @@ export default function TorMap() {
   // Fetch index and return new date if found
   const fetchIndexData = useCallback(async (): Promise<string | null> => {
     try {
+      setLoadingStatus('Loading index...');
+      setLoadingProgress(10);
       const { data: index, source } = await fetchWithFallback<DateIndex>('index.json');
       if (source === 'fallback') {
         console.info('[TorMap] Using fallback data source for index');
@@ -236,6 +242,7 @@ export default function TorMap() {
   useEffect(() => {
     async function loadCountryGeoJson() {
       try {
+        setLoadingStatus('Loading map data...');
         // Try to load from local first, then fallback
         let response;
         try {
@@ -320,6 +327,7 @@ export default function TorMap() {
           }
           
           setCountryGeojson(geojson);
+          setLoadingProgress(prev => Math.max(prev, 20));
         }
       } catch (err) {
         console.warn('Could not load country GeoJSON:', err);
@@ -335,12 +343,14 @@ export default function TorMap() {
     
     async function loadCountryData() {
       try {
+        setLoadingStatus('Loading country stats...');
         const { data, source } = await fetchWithFallback<{ countries?: CountryHistogram }>(`countries-${currentDate}.json`);
         if (source === 'fallback') {
           console.info(`[TorMap] Using fallback for country data ${currentDate}`);
         }
         // data.countries is the CountryHistogram: { "US": 444507, "DE": 224891, ... }
         setCountryData(data.countries || data as CountryHistogram);
+        setLoadingProgress(prev => Math.max(prev, 90));
       } catch (err) {
         console.warn('Could not load country data:', err);
         setCountryData({});
@@ -349,6 +359,14 @@ export default function TorMap() {
     
     loadCountryData();
   }, [currentDate]);
+
+  // Smooth completion of loading
+  useEffect(() => {
+    if (!initialLoading && mapLoaded) {
+      setLoadingProgress(100);
+      setLoadingStatus('Ready');
+    }
+  }, [initialLoading, mapLoaded]);
 
   // Trigger relay fade-in transition
   const startRelayTransition = useCallback(() => {
@@ -385,18 +403,24 @@ export default function TorMap() {
 
     async function fetchRelays() {
       setLoading(true);
+      setLoadingStatus('Downloading relay data...');
+      // Progress handler: map 0-1 download progress to 30-70% total loading
+      const onProgress = (p: number) => setLoadingProgress(30 + p * 40);
+
       try {
         // Try flat structure first, then current/ subdirectory
         let result;
         try {
-          result = await fetchWithFallback<RelayData>(`relays-${currentDate}.json`);
+          result = await fetchWithFallback<RelayData>(`relays-${currentDate}.json`, { onProgress });
         } catch {
-          result = await fetchWithFallback<RelayData>(`current/relays-${currentDate}.json`);
+          result = await fetchWithFallback<RelayData>(`current/relays-${currentDate}.json`, { onProgress });
         }
         
         if (result.source === 'fallback') {
           console.info(`[TorMap] Using fallback for relay data ${currentDate}`);
         }
+        
+        setLoadingStatus('Processing data...');
         
         // Check if data actually changed (different day)
         const dataChanged = prevRelayDataRef.current !== null && 
@@ -404,6 +428,7 @@ export default function TorMap() {
         
         prevRelayDataRef.current = result.data;
         setRelayData(result.data);
+        setLoadingProgress(prev => Math.max(prev, 70));
         setError(null);
         
         // Trigger fade-in if data changed
@@ -634,10 +659,15 @@ export default function TorMap() {
           getRadius: (d: AggregatedNode) =>
             calculateNodeRadius(d, viewState.zoom, maxRelayCount, maxBandwidth),
           getFillColor: (d: AggregatedNode) => {
-            // Color by relay type: Exit (orange) > Guard (deep green) > Middle (mint green)
+            // Use pre-calculated type for efficient rendering (no iteration needed)
+            if (d.type) {
+              if (d.type === 'exit') return config.relayColors.exit;
+              if (d.type === 'guard') return config.relayColors.guard;
+              return config.relayColors.middle;
+            }
+            // Fallback for legacy data (calculated on the fly)
             const hasExit = d.relays.some(r => r.flags.includes('E'));
             const hasGuard = d.relays.some(r => r.flags.includes('G'));
-            
             if (hasExit) return config.relayColors.exit;
             if (hasGuard) return config.relayColors.guard;
             return config.relayColors.middle;
@@ -662,6 +692,7 @@ export default function TorMap() {
   // const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
   const layers = baseLayers;
 
+  /*
   // Initial Loading state (only shown on first load)
   if (initialLoading && !relayData) {
     return (
@@ -673,6 +704,7 @@ export default function TorMap() {
       </div>
     );
   }
+  */
 
   // Error state (only shown if no data at all)
   if (error && !relayData) {
@@ -692,6 +724,14 @@ export default function TorMap() {
 
   return (
     <div className="relative w-full h-full" ref={interactiveContainerRef}>
+      {/* Startup Overlay - covers everything during initialization */}
+      <StartupOverlay
+        visible={initialLoading || !mapLoaded}
+        progress={loadingProgress}
+        status={loadingStatus}
+      />
+
+      {/* Interactive Map - Active layer */}
       <DeckGL
         viewState={viewState}
         onViewStateChange={handleViewStateChange}
@@ -706,6 +746,7 @@ export default function TorMap() {
         <Map
           mapStyle={config.mapStyle}
           attributionControl={true}
+          onLoad={() => setMapLoaded(true)}
         />
       </DeckGL>
 
@@ -849,7 +890,7 @@ export default function TorMap() {
               <span className="text-gray-600 text-[9px]">– intermediate</span>
             </div>
             <div className="flex items-center gap-1.5 text-[10px] mt-1">
-              <span className="w-2 h-2 rounded-full bg-purple-400" />
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.hidden.slice(0, 3).join(',')})` }} />
               <span className="text-gray-400">HSDir</span>
               <span className="text-gray-600 text-[9px]">– hidden services</span>
             </div>
