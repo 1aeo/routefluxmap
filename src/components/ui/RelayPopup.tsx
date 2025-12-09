@@ -7,6 +7,7 @@ import { config, getRelayMetricsUrl } from '../../lib/config';
 
 interface RelayPopupProps {
   node: AggregatedNode;
+  countryName?: string | null;
   x: number;
   y: number;
   onClose: () => void;
@@ -45,7 +46,7 @@ function isHSDir(flags: string): boolean {
   return flags.includes('H');
 }
 
-export default function RelayPopup({ node, x, y, onClose }: RelayPopupProps) {
+export default function RelayPopup({ node, countryName, x, y, onClose }: RelayPopupProps) {
   // Calculate position to keep popup in viewport
   const left = Math.min(x + 15, window.innerWidth - 380);
   const top = Math.min(y + 15, window.innerHeight - 400);
@@ -68,6 +69,7 @@ export default function RelayPopup({ node, x, y, onClose }: RelayPopupProps) {
           </h3>
           <p className="text-gray-400 text-xs mt-1">
             {node.lat.toFixed(4)}, {node.lng.toFixed(4)}
+            {countryName && <span className="text-gray-500"> — {countryName}</span>}
           </p>
           <p className="text-gray-500 text-xs">
             {formatBandwidth(node.normalized_bandwidth)} of network

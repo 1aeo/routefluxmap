@@ -11,7 +11,7 @@ import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
 import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode, updateCountryCode } from '../../lib/utils/url';
-import { countryCentroids, threeToTwo } from '../../lib/utils/geo';
+import { countryCentroids, threeToTwo, findCountryAtLocation } from '../../lib/utils/geo';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
 // Transition duration for relay dot fading
@@ -83,6 +83,7 @@ export default function TorMap() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<AggregatedNode | null>(null);
+  const [selectedCountryName, setSelectedCountryName] = useState<string | null>(null);
   const [popupPosition, setPopupPosition] = useState<{ x: number; y: number } | null>(null);
   const [hoverInfo, setHoverInfo] = useState<{ node: AggregatedNode; x: number; y: number } | null>(null);
   
@@ -440,13 +441,21 @@ export default function TorMap() {
   // Handle click on relay marker
   const handleClick = useCallback((info: PickingInfo) => {
     if (info.object) {
-      setSelectedNode(info.object as AggregatedNode);
+      const node = info.object as AggregatedNode;
+      setSelectedNode(node);
       setPopupPosition({ x: info.x, y: info.y });
-    } else {
-      setSelectedNode(null);
-      setPopupPosition(null);
+      
+      // Find country name from location
+      if (countryGeojson) {
+        const name = findCountryAtLocation(node.lng, node.lat, countryGeojson);
+        setSelectedCountryName(name);
+      } else {
+        setSelectedCountryName(null);
+      }
+      return true; // Stop propagation to DeckGL onClick
     }
-  }, []);
+    return false;
+  }, [countryGeojson]);
 
   // Handle hover - throttled to reduce picking overhead during particle animation
   // Deck.gl's picking causes GPU readback on every mouse move, which blocks animation
@@ -481,7 +490,15 @@ export default function TorMap() {
   const handleClosePopup = useCallback(() => {
     setSelectedNode(null);
     setPopupPosition(null);
+    setSelectedCountryName(null);
   }, []);
+
+  // Handle background click to close popup
+  const handleDeckClick = useCallback((info: PickingInfo) => {
+    if (!info.object) {
+      handleClosePopup();
+    }
+  }, [handleClosePopup]);
 
   // Handle country hover - completely ref-based for zero lag
   const handleCountryHover = useCallback((code: string | null, x: number, y: number) => {
@@ -680,6 +697,7 @@ export default function TorMap() {
         onViewStateChange={handleViewStateChange}
         controller={true}
         layers={layers}
+        onClick={handleDeckClick} // Handle background clicks
         // Use our throttled hover state for cursor instead of Deck.gl's internal picking
         // This avoids the expensive isHovering check on every mouse move
         getCursor={() => hoverInfo ? 'pointer' : 'grab'}
@@ -747,6 +765,7 @@ export default function TorMap() {
       {selectedNode && popupPosition && (
         <RelayPopup
           node={selectedNode}
+          countryName={selectedCountryName}
           x={popupPosition.x}
           y={popupPosition.y}
           onClose={handleClosePopup}
