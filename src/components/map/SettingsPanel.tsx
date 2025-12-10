@@ -72,20 +72,26 @@ export default function SettingsPanel({
         </div>
       </div>
 
-      {/* Density Slider */}
+      {/* Top Bandwidth Routes Slider */}
       <div className="mb-3">
         <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-          <span>Density</span>
+          <span 
+            className="cursor-help border-b border-dotted border-gray-500"
+            title="Show the top N% of routes by bandwidth contribution"
+          >
+            Top Bandwidth Routes
+          </span>
           <span>{(density * 100).toFixed(0)}%</span>
         </div>
         <input
           type="range"
-          min="0.1"
+          min="0.01"
           max="1.0"
-          step="0.1"
+          step="0.01"
           value={density}
           onChange={(e) => setDensity(parseFloat(e.target.value))}
           className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
+          title="Show the top N% of routes by bandwidth contribution"
         />
       </div>
 
