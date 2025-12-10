@@ -66,6 +66,15 @@ let XZ_THREADS = DEFAULT_XZ_THREADS;
 // Retry configuration
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;  // Start with 2s, then exponential backoff
+const RETRY_JITTER_MS = 2000;  // Random jitter 0-2s to prevent thundering herd
+
+// Timeout configuration
+const DOWNLOAD_TIMEOUT_MS = 30000;      // 30s connection timeout for archive downloads
+const DOWNLOAD_STALL_MS = 15000;        // 15s stall detection (no data received)
+const COUNTRY_FETCH_TIMEOUT_MS = 180000; // 3 min timeout for country data (API is slow)
+
+// Concurrency limits
+const MAX_COUNTRY_FETCH_CONCURRENCY = 3;  // Max concurrent country data fetches
 
 // ============================================================================
 // Types
@@ -599,6 +608,28 @@ async function processOnionooRelays(data: OnionooResponse): Promise<ProcessedRel
 const downloadLocks: Map<string, Promise<string | null>> = new Map();
 const extractionLocks: Map<string, Promise<string | null>> = new Map();
 const descriptorParseLocks: Map<string, Promise<Map<string, BandwidthEntry[]>>> = new Map();
+const countryFetchLocks: Map<string, Promise<Map<string, CountryData>>> = new Map();
+
+// Semaphore for limiting concurrent country fetches
+let activeCountryFetches = 0;
+const countryFetchQueue: (() => void)[] = [];
+
+async function withCountryFetchLimit<T>(operation: () => Promise<T>): Promise<T> {
+  // Wait if at max concurrency
+  if (activeCountryFetches >= MAX_COUNTRY_FETCH_CONCURRENCY) {
+    await new Promise<void>(resolve => countryFetchQueue.push(resolve));
+  }
+  
+  activeCountryFetches++;
+  try {
+    return await operation();
+  } finally {
+    activeCountryFetches--;
+    // Release next waiting operation
+    const next = countryFetchQueue.shift();
+    if (next) next();
+  }
+}
 
 async function withLock<T>(
   locks: Map<string, Promise<T>>,
@@ -639,9 +670,11 @@ async function withRetry<T>(
     } catch (e: any) {
       lastError = e;
       if (attempt < maxRetries) {
-        const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        // Add jitter to prevent thundering herd when multiple workers retry
+        const jitter = Math.random() * RETRY_JITTER_MS;
+        const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1) + jitter;
         console.log(`    ⚠ ${operationName} failed (attempt ${attempt}/${maxRetries}): ${e.message}`);
-        console.log(`    ⏳ Retrying in ${delay / 1000}s...`);
+        console.log(`    ⏳ Retrying in ${(delay / 1000).toFixed(1)}s...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -659,15 +692,47 @@ function downloadFile(url: string, dest: string): Promise<void> {
     // Use a temp file to avoid partial downloads being used
     const tempDest = dest + '.downloading';
     const file = fs.createWriteStream(tempDest);
+    let stallCheckInterval: NodeJS.Timeout | null = null;
+    let resolved = false;
     
-    https.get(url, res => {
+    const cleanup = () => {
+      if (stallCheckInterval) {
+        clearInterval(stallCheckInterval);
+        stallCheckInterval = null;
+      }
+    };
+    
+    const fail = (error: Error) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      fs.unlink(tempDest, () => {});
+      reject(error);
+    };
+    
+    const req = https.get(url, res => {
       if (res.statusCode !== 200) {
-        fs.unlink(tempDest, () => {});
-        reject(new Error(`HTTP ${res.statusCode}`));
+        fail(new Error(`HTTP ${res.statusCode}`));
         return;
       }
+      
+      // Track progress for stall detection
+      let lastDataTime = Date.now();
+      res.on('data', () => { lastDataTime = Date.now(); });
+      
+      // Check for stalls every 5 seconds
+      stallCheckInterval = setInterval(() => {
+        if (Date.now() - lastDataTime > DOWNLOAD_STALL_MS) {
+          req.destroy();
+          fail(new Error(`Download stalled (no data for ${DOWNLOAD_STALL_MS / 1000}s)`));
+        }
+      }, 5000);
+      
       res.pipe(file);
       file.on('finish', () => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
         file.close();
         // Rename temp file to final destination atomically
         try {
@@ -675,12 +740,19 @@ function downloadFile(url: string, dest: string): Promise<void> {
           resolve();
         } catch (e) {
           fs.unlink(tempDest, () => {});
-          reject(e);
+          reject(e as Error);
         }
       });
-    }).on('error', e => {
-      fs.unlink(tempDest, () => {});
-      reject(e);
+    });
+    
+    // Connection timeout
+    req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+      req.destroy();
+      fail(new Error(`Connection timeout (${DOWNLOAD_TIMEOUT_MS / 1000}s)`));
+    });
+    
+    req.on('error', e => {
+      fail(e);
     });
   });
 }
@@ -1321,8 +1393,8 @@ function fetchMonthlyCountryDataOnce(year: number, month: number): Promise<Map<s
     
     const url = `https://metrics.torproject.org/userstats-relay-country.csv?start=${startDate}&end=${endDate}`;
     
-    // Set a longer timeout for monthly requests (larger response)
-    const req = https.get(url, { timeout: 120000 }, (res) => {
+    // Set a longer timeout for monthly requests (Tor Metrics API can be slow)
+    const req = https.get(url, { timeout: COUNTRY_FETCH_TIMEOUT_MS }, (res) => {
       if (res.statusCode !== 200) {
         reject(new Error(`HTTP ${res.statusCode}`));
         return;
@@ -1387,7 +1459,7 @@ function fetchMonthlyCountryDataOnce(year: number, month: number): Promise<Map<s
     req.on('error', reject);
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('Request timeout (120s)'));
+      reject(new Error(`Request timeout (${COUNTRY_FETCH_TIMEOUT_MS / 1000}s)`));
     });
   });
 }
@@ -1458,6 +1530,7 @@ function fetchDailyCountryDataOnce(date: string): Promise<CountryData> {
 
 /**
  * Load monthly country data with caching.
+ * Uses lock to prevent duplicate fetches and semaphore to limit concurrency.
  * Tries batch request first, falls back to daily if batch fails.
  */
 async function loadMonthlyCountryData(year: number, month: number): Promise<Map<string, CountryData>> {
@@ -1468,28 +1541,39 @@ async function loadMonthlyCountryData(year: number, month: number): Promise<Map<
     return monthlyCountryCache.get(monthStr)!;
   }
   
-  // Try batch request with retries
-  try {
-    const data = await withRetry(
-      () => fetchMonthlyCountryDataOnce(year, month),
-      `Monthly country data ${monthStr}`,
-      3  // 3 retries for batch
-    );
-    
-    if (data.size > 0) {
-      console.log(`    ✓ Loaded country data for ${monthStr} (${data.size} days, batch)`);
-      monthlyCountryCache.set(monthStr, data);
-      return data;
+  // Use lock to prevent duplicate fetches of the same month
+  return withLock(countryFetchLocks, monthStr, async () => {
+    // Double-check cache after acquiring lock (another worker may have populated it)
+    if (monthlyCountryCache.has(monthStr)) {
+      return monthlyCountryCache.get(monthStr)!;
     }
-  } catch (e: any) {
-    console.log(`    ⚠ Batch country fetch failed for ${monthStr}: ${e.message}`);
-    console.log(`    ↳ Falling back to daily requests`);
-  }
-  
-  // Return empty map - will fall back to daily requests
-  const emptyMap = new Map<string, CountryData>();
-  monthlyCountryCache.set(monthStr, emptyMap);
-  return emptyMap;
+    
+    // Use semaphore to limit concurrent country fetches
+    return withCountryFetchLimit(async () => {
+      // Try batch request with retries
+      try {
+        const data = await withRetry(
+          () => fetchMonthlyCountryDataOnce(year, month),
+          `Monthly country data ${monthStr}`,
+          3  // 3 retries for batch
+        );
+        
+        if (data.size > 0) {
+          console.log(`    ✓ Loaded country data for ${monthStr} (${data.size} days, batch)`);
+          monthlyCountryCache.set(monthStr, data);
+          return data;
+        }
+      } catch (e: any) {
+        console.log(`    ⚠ Batch country fetch failed for ${monthStr}: ${e.message}`);
+        console.log(`    ↳ Falling back to daily requests`);
+      }
+      
+      // Return empty map - will fall back to daily requests
+      const emptyMap = new Map<string, CountryData>();
+      monthlyCountryCache.set(monthStr, emptyMap);
+      return emptyMap;
+    });
+  });
 }
 
 /**
@@ -1710,8 +1794,25 @@ async function processDate(dateStr: string): Promise<void> {
   // Fetch country data from Tor Metrics (always available for historical dates)
   const countryStart = Date.now();
   try {
-    const countryData = await fetchCountryClients(dateStr);
+    let countryData = await fetchCountryClients(dateStr);
     steps.push({ step: 'country-fetch', durationMs: Date.now() - countryStart });
+    
+    // Fallback to previous day if no country data (some dates have gaps in Tor Metrics)
+    if (Object.keys(countryData.countries).length === 0) {
+      const prevDate = new Date(dateStr);
+      prevDate.setDate(prevDate.getDate() - 1);
+      const prevDateStr = prevDate.toISOString().slice(0, 10);
+      const prevPath = path.join(OUTPUT_DIR, `countries-${prevDateStr}.json`);
+      
+      if (fs.existsSync(prevPath)) {
+        try {
+          countryData = JSON.parse(fs.readFileSync(prevPath, 'utf-8'));
+          console.log(`    ⚠ No country data for ${dateStr}, using ${prevDateStr}`);
+        } catch {
+          // Keep empty data if fallback fails
+        }
+      }
+    }
     
     const writeStart = Date.now();
     fs.writeFileSync(countryPath, JSON.stringify(countryData, null, 2));
