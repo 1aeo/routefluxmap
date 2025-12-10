@@ -1,12 +1,9 @@
 /**
  * Particle Render Worker
- * 
- * Handles particle simulation AND rendering on a separate thread via OffscreenCanvas.
- * OPTIMIZED: Uses GPU-based animation (Vertex Shader) to avoid CPU calc and bus transfer.
- * Mimics TorFlow architecture for maximum performance.
+ * Renders traffic flow visualization with bandwidth-proportional routes.
+ * - Line thickness, particle count, speed, and size all scale with bandwidth rank
+ * - Uses OffscreenCanvas for GPU rendering on separate thread
  */
-
-// Force module scope
 export {};
 
 // --- Types ---
@@ -23,165 +20,147 @@ interface ViewState {
 interface WorkerMessage {
   type: 'init' | 'updateNodes' | 'updateViewState' | 'resize' | 'updateSettings';
   canvas?: OffscreenCanvas;
-  nodes?: { lng: number; lat: number; isHSDir: boolean }[];
+  nodes?: { lng: number; lat: number; isHSDir: boolean; normalized_bandwidth?: number }[];
   viewState?: ViewState;
   width?: number;
   height?: number;
   pixelRatio?: number;
-  // Settings
   density?: number;
   opacity?: number;
   speed?: number;
   trafficType?: 'all' | 'hidden' | 'general';
 }
 
-// --- Global State ---
+interface Route {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  isHidden: boolean;
+  bandwidthScore: number;
+  bandwidthRank: number; // 0 = top, 1 = lowest
+}
+
+// --- Constants ---
+const MAX_ROUTES = 3000;
+const TILE_SIZE = 512;
+const PI = Math.PI;
+const DEG_TO_RAD = PI / 180;
+const LINE_OFFSET = 0.00008; // Perpendicular offset for parallel lines
+
+// Bandwidth rank thresholds: [threshold, lineCount, particleCount]
+const RANK_TIERS = [
+  [0.01, 5, 6], // Top 1%
+  [0.05, 4, 5], // Top 5%
+  [0.10, 3, 4], // Top 10%
+  [0.25, 2, 3], // Top 25%
+  [0.50, 1, 2], // Top 50%
+  [1.00, 1, 1], // Rest
+] as const;
+
+// --- State ---
 let canvas: OffscreenCanvas | null = null;
 let gl: WebGL2RenderingContext | null = null;
+let lineProgram: WebGLProgram | null = null;
 let particleProgram: WebGLProgram | null = null;
+let lineVAO: WebGLVertexArrayObject | null = null;
 let particleVAO: WebGLVertexArrayObject | null = null;
 
-// Simulation State
-let nodes: { x: number; y: number; isHSDir: boolean }[] = [];
-let particleCount = 0;
-const MAX_PARTICLES = 50000;
+// Cached uniform locations (performance optimization)
+let lineUniforms: Record<string, WebGLUniformLocation | null> = {};
+let particleUniforms: Record<string, WebGLUniformLocation | null> = {};
 
-// Settings
+let nodes: { x: number; y: number; isHSDir: boolean; bandwidth: number }[] = [];
+let allRoutes: Route[] = [];
+let routes: Route[] = [];
+let lineVertexCount = 0;
+let particleCount = 0;
+
 let currentDensity = 1.0;
 let currentOpacity = 1.0;
 let currentSpeedFactor = 1.0;
-let currentTrafficType = 'all'; // 'all', 'hidden', 'general'
-
-// View State
-let currentViewState: ViewState = {
-  longitude: 0,
-  latitude: 0,
-  zoom: 1,
-  width: 800,
-  height: 600,
-  bearing: 0,
-  pitch: 0
-};
+let currentTrafficType = 'all';
+let currentViewState: ViewState = { longitude: 0, latitude: 0, zoom: 1, width: 800, height: 600 };
 let devicePixelRatio = 1;
 let startTime = 0;
 
-// Constants matching Mapbox/Deck.gl
-const TILE_SIZE = 512;
-const PI = Math.PI;
-const PI_4 = PI / 4;
-const DEGREES_TO_RADIANS = PI / 180;
+// --- Shaders ---
+const LINE_VS = `#version 300 es
+in vec2 a_position;
+in float a_type;
+uniform float u_scale;
+uniform vec2 u_center, u_screenSize;
+out float v_type;
+void main() {
+  vec2 p = (a_position - u_center) * u_scale;
+  gl_Position = vec4(p.x / (u_screenSize.x * 0.5), -p.y / (u_screenSize.y * 0.5), 0.0, 1.0);
+  v_type = a_type;
+}`;
 
-// --- Projection Helpers ---
+const LINE_FS = `#version 300 es
+precision mediump float;
+uniform float u_opacity;
+uniform int u_trafficType;
+in float v_type;
+out vec4 fragColor;
+void main() {
+  if (u_trafficType == 1 && v_type > 0.5) discard;
+  if (u_trafficType == 2 && v_type < 0.5) discard;
+  vec3 color = v_type < 0.5 ? vec3(0.0, 1.0, 0.53) : vec3(1.0, 0.4, 0.0);
+  float a = u_opacity * 0.1;
+  fragColor = vec4(color * a, a);
+}`;
 
+const PARTICLE_VS = `#version 300 es
+in vec2 a_start, a_end;
+in float a_speed, a_timeOffset, a_type, a_bandwidthRank;
+uniform float u_time, u_scale, u_speedFactor;
+uniform vec2 u_center, u_screenSize;
+out float v_type, v_progress;
+void main() {
+  float speedMult = 1.0 + (1.0 - a_bandwidthRank) * 2.0;
+  float t = fract(u_time * a_speed * u_speedFactor * speedMult + a_timeOffset);
+  float st = t * t * (3.0 - 2.0 * t);
+  vec2 pos = mix(a_start, a_end, st);
+  vec2 p = (pos - u_center) * u_scale;
+  gl_Position = vec4(p.x / (u_screenSize.x * 0.5), -p.y / (u_screenSize.y * 0.5), 0.0, 1.0);
+  gl_PointSize = 2.0 + (1.0 - a_bandwidthRank) * 4.0;
+  v_type = a_type;
+  v_progress = t;
+}`;
+
+const PARTICLE_FS = `#version 300 es
+precision mediump float;
+uniform float u_opacity;
+uniform int u_trafficType;
+in float v_type, v_progress;
+out vec4 fragColor;
+void main() {
+  if (u_trafficType == 1 && v_type > 0.5) discard;
+  if (u_trafficType == 2 && v_type < 0.5) discard;
+  vec3 color = v_type < 0.5 ? vec3(0.0, 1.0, 0.53) : vec3(1.0, 0.4, 0.0);
+  float fade = smoothstep(0.0, 0.1, v_progress) * smoothstep(1.0, 0.9, v_progress);
+  vec2 c = 2.0 * gl_PointCoord - 1.0;
+  float soft = 1.0 - smoothstep(0.3, 1.0, dot(c, c));
+  float a = u_opacity * 1.6 * fade * soft;
+  fragColor = vec4(color * a, a);
+}`;
+
+// --- Helpers ---
 function projectToWorld(lng: number, lat: number): [number, number] {
-  const lambda = lng * DEGREES_TO_RADIANS;
-  const phi = lat * DEGREES_TO_RADIANS;
-  const x = (TILE_SIZE / (2 * PI)) * (lambda + PI);
-  const y = (TILE_SIZE / (2 * PI)) * (PI - Math.log(Math.tan(PI_4 + phi * 0.5)));
+  const x = (TILE_SIZE / (2 * PI)) * (lng * DEG_TO_RAD + PI);
+  const y = (TILE_SIZE / (2 * PI)) * (PI - Math.log(Math.tan(PI / 4 + lat * DEG_TO_RAD * 0.5)));
   return [x, y];
 }
 
-// --- WebGL Shaders (GPU Animation) ---
-
-const VS_SOURCE = `#version 300 es
-// Static attributes (uploaded once)
-in vec2 a_start;       // World Coordinate (Mercator)
-in vec2 a_end;         // World Coordinate (Mercator)
-in float a_speed;      // Base speed factor
-in float a_timeOffset; // Random time offset (0-1)
-in float a_type;       // 0.0 = General, 1.0 = Hidden
-
-uniform float u_time;
-uniform float u_scale;
-uniform vec2 u_center;
-uniform vec2 u_screenSize;
-uniform float u_speedFactor; // Global speed multiplier
-
-out float v_type; // Pass type to fragment shader
-
-void main() {
-  // 1. Calculate Progress (0.0 to 1.0) based on time
-  // t = (time * baseSpeed * globalSpeed + offset) % 1.0
-  float t = fract(u_time * a_speed * u_speedFactor + a_timeOffset);
-  
-  // 2. Linear Interpolation in World Space
-  vec2 pos = mix(a_start, a_end, t);
-  
-  // 3. Project to Screen Space
-  vec2 screenPos = (pos - u_center) * u_scale;
-  
-  // 4. Normalize to Clip Space
-  gl_Position = vec4(
-    screenPos.x / (u_screenSize.x * 0.5), 
-    -screenPos.y / (u_screenSize.y * 0.5), 
-    0.0, 
-    1.0
-  );
-  
-  gl_PointSize = 2.0;
-  v_type = a_type;
-}
-`;
-
-const FS_SOURCE = `#version 300 es
-precision mediump float;
-uniform float u_opacity; // Global opacity
-uniform int u_trafficType; // 0=All, 1=General, 2=Hidden
-
-in float v_type;
-out vec4 fragColor;
-
-void main() {
-  // Filter based on traffic type
-  if (u_trafficType == 1 && v_type > 0.5) discard; // Show General only, discard Hidden
-  if (u_trafficType == 2 && v_type < 0.5) discard; // Show Hidden only, discard General
-
-  // Base color: 
-  // General (v_type < 0.5) = Tor Green (0.0, 1.0, 0.53)
-  // Hidden (v_type > 0.5) = Tor Orange (1.0, 0.4, 0.0) // Orange/Gold
-  
-  vec3 color = (v_type < 0.5) 
-    ? vec3(0.0, 1.0, 0.53) 
-    : vec3(1.0, 0.4, 0.0);
-
-  // Multiplier 1.2 means slider 1.0 -> alpha 1.2 (clamped to 1.0)
-  // This ensures 100% on slider feels "fully solid"
-  float a = clamp(1.2 * u_opacity, 0.0, 1.0);
-  
-  // Output Premultiplied Alpha
-  // RGB * Alpha
-  fragColor = vec4(color * a, a);
-}
-`;
-
-function initWebGL() {
-  if (!canvas) return;
-  
-  gl = canvas.getContext('webgl2', {
-    alpha: true,
-    antialias: false,
-    depth: false,
-    powerPreference: 'high-performance',
-    premultipliedAlpha: true // Default is true, explicit here
-  }) as WebGL2RenderingContext;
-  
-  if (!gl) return;
-
-  // Enable Blending for transparency
-  gl.enable(gl.BLEND);
-  // Standard Pre-multiplied Alpha Blending (prevents additive saturation/blue-shift)
-  // Src * 1 + Dst * (1 - SrcAlpha)
-  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  
-  const vs = createShader(gl, gl.VERTEX_SHADER, VS_SOURCE);
-  const fs = createShader(gl, gl.FRAGMENT_SHADER, FS_SOURCE);
-  if (!vs || !fs) return;
-  
-  particleProgram = createProgram(gl, vs, fs);
-  particleVAO = gl.createVertexArray();
+function getTierForRank(rank: number): [number, number] {
+  for (const [threshold, lines, particles] of RANK_TIERS) {
+    if (rank < threshold) return [lines, particles];
+  }
+  return [1, 1];
 }
 
-function createShader(gl: WebGL2RenderingContext, type: number, source: string) {
+function createShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader | null {
   const shader = gl.createShader(type);
   if (!shader) return null;
   gl.shaderSource(shader, source);
@@ -193,7 +172,7 @@ function createShader(gl: WebGL2RenderingContext, type: number, source: string) 
   return shader;
 }
 
-function createProgram(gl: WebGL2RenderingContext, vs: WebGLShader, fs: WebGLShader) {
+function createProgram(gl: WebGL2RenderingContext, vs: WebGLShader, fs: WebGLShader): WebGLProgram | null {
   const program = gl.createProgram();
   if (!program) return null;
   gl.attachShader(program, vs);
@@ -206,165 +185,260 @@ function createProgram(gl: WebGL2RenderingContext, vs: WebGLShader, fs: WebGLSha
   return program;
 }
 
-// --- Data Initialization ---
+// --- WebGL Init ---
+function initWebGL() {
+  if (!canvas) return;
+  gl = canvas.getContext('webgl2', {
+    alpha: true, antialias: true, depth: false,
+    powerPreference: 'high-performance', premultipliedAlpha: true
+  }) as WebGL2RenderingContext;
+  if (!gl) return;
 
-function initParticles() {
-  if (!gl || !particleProgram || nodes.length < 2) return;
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-  // We always allocate MAX buffer, but only draw subset
-  // Data layout: 6 floats per particle -> 7 floats (added type)
-  // a_start(2), a_end(2), a_speed(1), a_timeOffset(1), a_type(1)
-  const FLOATS_PER_PARTICLE = 7;
-  const data = new Float32Array(MAX_PARTICLES * FLOATS_PER_PARTICLE);
-  
-  // Identify HSDir indices for efficient selection
-  const hsDirIndices = nodes
-    .map((n, i) => n.isHSDir ? i : -1)
-    .filter(i => i !== -1);
-  
-  for (let i = 0; i < MAX_PARTICLES; i++) {
-    // Determine Type randomly (approx 10% Hidden Service traffic?)
-    // Or just assign random source/dest and check if they are HSDir?
-    // TorFlow likely generates specific circuits.
-    // Let's force ~15% particles to be Hidden Service (HSDir <-> HSDir)
-    // and 85% to be General (Any <-> Any)
-    const isHidden = Math.random() < 0.15;
-    
-    let src, tgt;
-    
-    if (isHidden && hsDirIndices.length >= 2) {
-      // Pick from HSDir pool
-      const srcIdx = hsDirIndices[Math.floor(Math.random() * hsDirIndices.length)];
-      const tgtIdx = hsDirIndices[Math.floor(Math.random() * hsDirIndices.length)];
-      src = nodes[srcIdx];
-      tgt = nodes[tgtIdx];
-    } else {
-      // Pick from all nodes
-      src = nodes[Math.floor(Math.random() * nodes.length)];
-      tgt = nodes[Math.floor(Math.random() * nodes.length)];
+  const lineVs = createShader(gl, gl.VERTEX_SHADER, LINE_VS);
+  const lineFs = createShader(gl, gl.FRAGMENT_SHADER, LINE_FS);
+  if (lineVs && lineFs) {
+    lineProgram = createProgram(gl, lineVs, lineFs);
+    lineVAO = gl.createVertexArray();
+    if (lineProgram) {
+      lineUniforms = {
+        u_scale: gl.getUniformLocation(lineProgram, 'u_scale'),
+        u_center: gl.getUniformLocation(lineProgram, 'u_center'),
+        u_screenSize: gl.getUniformLocation(lineProgram, 'u_screenSize'),
+        u_opacity: gl.getUniformLocation(lineProgram, 'u_opacity'),
+        u_trafficType: gl.getUniformLocation(lineProgram, 'u_trafficType'),
+      };
     }
-    
-    const off = i * FLOATS_PER_PARTICLE;
-    
-    // Handle wrapping
-    let startX = src.x;
-    let endX = tgt.x;
-    const worldWidth = TILE_SIZE;
-    const diff = endX - startX;
-    
-    if (diff > worldWidth / 2) {
-      endX -= worldWidth;
-    } else if (diff < -worldWidth / 2) {
-      endX += worldWidth;
-    }
-
-    data[off + 0] = startX;
-    data[off + 1] = src.y;
-    data[off + 2] = endX;
-    data[off + 3] = tgt.y;
-    data[off + 4] = 0.05 + Math.random() * 0.15; // Base speed
-    data[off + 5] = Math.random(); // Random offset
-    data[off + 6] = isHidden ? 1.0 : 0.0; // Type
   }
 
-  if (particleVAO) {
-    gl.bindVertexArray(particleVAO);
-    
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    
-    const STRIDE = 7 * 4; // 28 bytes
-    
-    const locStart = gl.getAttribLocation(particleProgram, 'a_start');
-    gl.enableVertexAttribArray(locStart);
-    gl.vertexAttribPointer(locStart, 2, gl.FLOAT, false, STRIDE, 0);
-    
-    const locEnd = gl.getAttribLocation(particleProgram, 'a_end');
-    gl.enableVertexAttribArray(locEnd);
-    gl.vertexAttribPointer(locEnd, 2, gl.FLOAT, false, STRIDE, 8);
-    
-    const locSpeed = gl.getAttribLocation(particleProgram, 'a_speed');
-    gl.enableVertexAttribArray(locSpeed);
-    gl.vertexAttribPointer(locSpeed, 1, gl.FLOAT, false, STRIDE, 16);
-    
-    const locOffset = gl.getAttribLocation(particleProgram, 'a_timeOffset');
-    gl.enableVertexAttribArray(locOffset);
-    gl.vertexAttribPointer(locOffset, 1, gl.FLOAT, false, STRIDE, 20);
-
-    const locType = gl.getAttribLocation(particleProgram, 'a_type');
-    gl.enableVertexAttribArray(locType);
-    gl.vertexAttribPointer(locType, 1, gl.FLOAT, false, STRIDE, 24);
+  const particleVs = createShader(gl, gl.VERTEX_SHADER, PARTICLE_VS);
+  const particleFs = createShader(gl, gl.FRAGMENT_SHADER, PARTICLE_FS);
+  if (particleVs && particleFs) {
+    particleProgram = createProgram(gl, particleVs, particleFs);
+    particleVAO = gl.createVertexArray();
+    if (particleProgram) {
+      particleUniforms = {
+        u_time: gl.getUniformLocation(particleProgram, 'u_time'),
+        u_scale: gl.getUniformLocation(particleProgram, 'u_scale'),
+        u_center: gl.getUniformLocation(particleProgram, 'u_center'),
+        u_screenSize: gl.getUniformLocation(particleProgram, 'u_screenSize'),
+        u_opacity: gl.getUniformLocation(particleProgram, 'u_opacity'),
+        u_speedFactor: gl.getUniformLocation(particleProgram, 'u_speedFactor'),
+        u_trafficType: gl.getUniformLocation(particleProgram, 'u_trafficType'),
+      };
+    }
   }
 }
 
-// --- Animation Loop ---
+// --- Route Generation ---
+function generateAllRoutes() {
+  if (nodes.length < 2) return;
+  allRoutes = [];
 
+  const hsDirIndices = nodes.map((n, i) => n.isHSDir ? i : -1).filter(i => i !== -1);
+  const weights = nodes.map(n => Math.sqrt(n.bandwidth + 0.1));
+  const totalWeight = weights.reduce((s, w) => s + w, 0);
+  
+  let cum = 0;
+  const cumWeights = weights.map(w => (cum += w) / totalWeight);
+
+  const selectNode = (): number => {
+    const r = Math.random();
+    let lo = 0, hi = cumWeights.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cumWeights[mid] < r) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+
+  let attempts = 0;
+  const maxAttempts = MAX_ROUTES * 10;
+
+  while (allRoutes.length < MAX_ROUTES && attempts < maxAttempts) {
+    attempts++;
+    const isHidden = Math.random() < 0.15;
+    let srcIdx: number, tgtIdx: number;
+
+    if (isHidden && hsDirIndices.length >= 2) {
+      srcIdx = hsDirIndices[(Math.random() * hsDirIndices.length) | 0];
+      tgtIdx = hsDirIndices[(Math.random() * hsDirIndices.length) | 0];
+    } else {
+      srcIdx = selectNode();
+      tgtIdx = selectNode();
+    }
+
+    if (srcIdx === tgtIdx) continue;
+
+    const src = nodes[srcIdx], tgt = nodes[tgtIdx];
+    let endX = tgt.x;
+    const diff = endX - src.x;
+    if (diff > TILE_SIZE / 2) endX -= TILE_SIZE;
+    else if (diff < -TILE_SIZE / 2) endX += TILE_SIZE;
+
+    allRoutes.push({
+      startX: src.x, startY: src.y, endX, endY: tgt.y,
+      isHidden, bandwidthScore: src.bandwidth * tgt.bandwidth, bandwidthRank: 0
+    });
+  }
+
+  console.log(`[ParticleWorker] Generated ${allRoutes.length} routes`);
+  allRoutes.sort((a, b) => b.bandwidthScore - a.bandwidthScore);
+  const len = allRoutes.length - 1 || 1;
+  for (let i = 0; i < allRoutes.length; i++) allRoutes[i].bandwidthRank = i / len;
+}
+
+function filterRoutesByDensity() {
+  if (!allRoutes.length) return;
+  routes = allRoutes.slice(0, Math.max(1, (allRoutes.length * currentDensity) | 0));
+}
+
+// --- Buffer Init ---
+function initLineBuffer() {
+  if (!gl || !lineProgram || !lineVAO || !routes.length) return;
+
+  let totalLines = 0;
+  for (const r of routes) totalLines += getTierForRank(r.bandwidthRank)[0];
+
+  const data = new Float32Array(totalLines * 6); // 2 verts * 3 floats
+  let vi = 0;
+
+  for (const r of routes) {
+    const [lineCount] = getTierForRank(r.bandwidthRank);
+    const type = r.isHidden ? 1.0 : 0.0;
+    const dx = r.endX - r.startX, dy = r.endY - r.startY;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const px = -dy / len, py = dx / len;
+
+    for (let i = 0; i < lineCount; i++) {
+      const m = (i - (lineCount - 1) / 2) * LINE_OFFSET;
+      const ox = px * m, oy = py * m;
+      data[vi++] = r.startX + ox; data[vi++] = r.startY + oy; data[vi++] = type;
+      data[vi++] = r.endX + ox; data[vi++] = r.endY + oy; data[vi++] = type;
+    }
+  }
+
+  lineVertexCount = totalLines * 2;
+  gl.bindVertexArray(lineVAO);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+
+  const posLoc = gl.getAttribLocation(lineProgram, 'a_position');
+  const typeLoc = gl.getAttribLocation(lineProgram, 'a_type');
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 12, 0);
+  gl.enableVertexAttribArray(typeLoc);
+  gl.vertexAttribPointer(typeLoc, 1, gl.FLOAT, false, 12, 8);
+  gl.bindVertexArray(null);
+}
+
+function initParticleBuffer() {
+  if (!gl || !particleProgram || !particleVAO || !routes.length) return;
+
+  let total = 0;
+  for (const r of routes) total += getTierForRank(r.bandwidthRank)[1];
+
+  const data = new Float32Array(total * 8);
+  let vi = 0;
+
+  for (const r of routes) {
+    const [, pCount] = getTierForRank(r.bandwidthRank);
+    const type = r.isHidden ? 1.0 : 0.0;
+    for (let p = 0; p < pCount; p++) {
+      data[vi++] = r.startX; data[vi++] = r.startY;
+      data[vi++] = r.endX; data[vi++] = r.endY;
+      data[vi++] = 0.12; // Fixed base speed (same for all particles)
+      data[vi++] = Math.random(); // Random start time offset (0-1 cycle)
+      data[vi++] = type;
+      data[vi++] = r.bandwidthRank;
+    }
+  }
+
+  particleCount = total;
+  gl.bindVertexArray(particleVAO);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+
+  const stride = 32;
+  const attrs = ['a_start', 'a_end', 'a_speed', 'a_timeOffset', 'a_type', 'a_bandwidthRank'];
+  const sizes = [2, 2, 1, 1, 1, 1];
+  const offsets = [0, 8, 16, 20, 24, 28];
+  
+  for (let i = 0; i < attrs.length; i++) {
+    const loc = gl.getAttribLocation(particleProgram, attrs[i]);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, sizes[i], gl.FLOAT, false, stride, offsets[i]);
+  }
+  gl.bindVertexArray(null);
+}
+
+function rebuildBuffers() {
+  generateAllRoutes();
+  filterRoutesByDensity();
+  initLineBuffer();
+  initParticleBuffer();
+}
+
+function rebuildBuffersForDensity() {
+  filterRoutesByDensity();
+  initLineBuffer();
+  initParticleBuffer();
+}
+
+// --- Animation ---
 function animate(now: number) {
-  if (!gl || !particleProgram) {
+  if (!gl || !lineProgram || !particleProgram) {
     requestAnimationFrame(animate);
     return;
   }
-  
-  if (startTime === 0) startTime = now;
-  const elapsed = (now - startTime) / 1000.0;
+
+  if (!startTime) startTime = now;
+  const t = (now - startTime) / 1000;
+  const scale = Math.pow(2, currentViewState.zoom);
+  const [cx, cy] = projectToWorld(currentViewState.longitude, currentViewState.latitude);
+  const traffic = currentTrafficType === 'general' ? 1 : currentTrafficType === 'hidden' ? 2 : 0;
 
   gl.viewport(0, 0, currentViewState.width * devicePixelRatio, currentViewState.height * devicePixelRatio);
   gl.clearColor(0, 0, 0, 0);
   gl.clear(gl.COLOR_BUFFER_BIT);
-  
-  gl.useProgram(particleProgram);
-  if (particleVAO) {
-    gl.bindVertexArray(particleVAO);
+
+  // Lines
+  if (lineVertexCount > 0) {
+    gl.useProgram(lineProgram);
+    gl.bindVertexArray(lineVAO);
+    gl.uniform1f(lineUniforms.u_scale, scale);
+    gl.uniform2f(lineUniforms.u_center, cx, cy);
+    gl.uniform2f(lineUniforms.u_screenSize, currentViewState.width, currentViewState.height);
+    gl.uniform1f(lineUniforms.u_opacity, currentOpacity);
+    gl.uniform1i(lineUniforms.u_trafficType, traffic);
+    gl.drawArrays(gl.LINES, 0, lineVertexCount);
   }
-  
-  // Update Uniforms
-  const uScale = Math.pow(2, currentViewState.zoom);
-  const [centerX, centerY] = projectToWorld(currentViewState.longitude, currentViewState.latitude);
-  
-  gl.uniform1f(gl.getUniformLocation(particleProgram, 'u_time')!, elapsed);
-  gl.uniform1f(gl.getUniformLocation(particleProgram, 'u_scale')!, uScale);
-  gl.uniform2f(gl.getUniformLocation(particleProgram, 'u_center')!, centerX, centerY);
-  gl.uniform2f(gl.getUniformLocation(particleProgram, 'u_screenSize')!, currentViewState.width, currentViewState.height);
-  
-  // Settings Uniforms
-  gl.uniform1f(gl.getUniformLocation(particleProgram, 'u_opacity')!, currentOpacity);
-  gl.uniform1f(gl.getUniformLocation(particleProgram, 'u_speedFactor')!, currentSpeedFactor * 5.0);
 
-  // Traffic Type Uniform
-  let trafficTypeInt = 0; // All
-  if (currentTrafficType === 'general') trafficTypeInt = 1;
-  if (currentTrafficType === 'hidden') trafficTypeInt = 2;
-  gl.uniform1i(gl.getUniformLocation(particleProgram, 'u_trafficType')!, trafficTypeInt);
-
-  // Draw subset based on density
-  // New Logic: Density 0.0-1.0 from UI
-  // Map 1.0 to old 6.0 behavior (which was 1.5x saturation)
-  const activeCount = Math.min(MAX_PARTICLES, Math.floor(MAX_PARTICLES * (currentDensity * 1.5))); 
-
-  if (activeCount > 0) {
-    gl.drawArrays(gl.POINTS, 0, activeCount);
+  // Particles
+  if (particleCount > 0) {
+    gl.useProgram(particleProgram);
+    gl.bindVertexArray(particleVAO);
+    gl.uniform1f(particleUniforms.u_time, t);
+    gl.uniform1f(particleUniforms.u_scale, scale);
+    gl.uniform2f(particleUniforms.u_center, cx, cy);
+    gl.uniform2f(particleUniforms.u_screenSize, currentViewState.width, currentViewState.height);
+    gl.uniform1f(particleUniforms.u_opacity, currentOpacity);
+    gl.uniform1f(particleUniforms.u_speedFactor, currentSpeedFactor);
+    gl.uniform1i(particleUniforms.u_trafficType, traffic);
+    gl.drawArrays(gl.POINTS, 0, particleCount);
   }
 
   requestAnimationFrame(animate);
 }
 
-// --- Message Handling ---
-
+// --- Message Handler ---
 self.onmessage = (e: MessageEvent<WorkerMessage>) => {
-  const { 
-    type, 
-    canvas: offscreen, 
-    nodes: rawNodes, 
-    viewState, 
-    width, 
-    height, 
-    pixelRatio,
-    density,
-    opacity,
-    speed,
-    trafficType
-  } = e.data;
+  const { type, canvas: offscreen, nodes: rawNodes, viewState, width, height, pixelRatio, density, opacity, speed, trafficType } = e.data;
 
   if (type === 'init' && offscreen) {
     canvas = offscreen;
@@ -372,20 +446,19 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
     initWebGL();
     requestAnimationFrame(animate);
   }
-  
+
   if (type === 'updateNodes' && rawNodes) {
-    // Pre-project nodes
     nodes = rawNodes.map(n => {
       const [x, y] = projectToWorld(n.lng, n.lat);
-      return { x, y, isHSDir: !!n.isHSDir };
+      return { x, y, isHSDir: !!n.isHSDir, bandwidth: n.normalized_bandwidth ?? 0 };
     });
-    initParticles();
+    rebuildBuffers();
   }
-  
+
   if (type === 'updateViewState' && viewState) {
     currentViewState = { ...currentViewState, ...viewState };
   }
-  
+
   if (type === 'resize' && width && height) {
     currentViewState.width = width;
     currentViewState.height = height;
@@ -396,9 +469,11 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
   }
 
   if (type === 'updateSettings') {
+    const densityChanged = density !== undefined && density !== currentDensity;
     if (density !== undefined) currentDensity = density;
     if (opacity !== undefined) currentOpacity = opacity;
     if (speed !== undefined) currentSpeedFactor = speed;
     if (trafficType !== undefined) currentTrafficType = trafficType;
+    if (densityChanged && allRoutes.length) rebuildBuffersForDensity();
   }
 };
