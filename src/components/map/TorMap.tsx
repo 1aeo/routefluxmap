@@ -11,7 +11,7 @@ import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
 import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode, updateCountryCode } from '../../lib/utils/url';
-import { countryCentroids, threeToTwo } from '../../lib/utils/geo';
+import { countryCentroids, threeToTwo, findCountryAtLocation } from '../../lib/utils/geo';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
 // Transition duration for relay dot fading
@@ -27,8 +27,10 @@ import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
 import LoadingBar from '../ui/LoadingBar';
+import StartupOverlay from '../ui/StartupOverlay';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
-import { useParticleLayer } from './ParticleOverlay';
+import ParticleCanvas from './ParticleCanvas';
+import SettingsPanel from './SettingsPanel';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 
@@ -82,8 +84,12 @@ export default function TorMap() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<AggregatedNode | null>(null);
+  const [selectedCountryName, setSelectedCountryName] = useState<string | null>(null);
   const [popupPosition, setPopupPosition] = useState<{ x: number; y: number } | null>(null);
   const [hoverInfo, setHoverInfo] = useState<{ node: AggregatedNode; x: number; y: number } | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState<string>('Initializing...');
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
+  const [mapLoaded, setMapLoaded] = useState(false);
   
   // Layer visibility state
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
@@ -95,9 +101,9 @@ export default function TorMap() {
   
   // Particle settings
   const [particleCount, setParticleCount] = useState(50000); // Start with lower count for performance
-  const [lineDensityFactor, setLineDensityFactor] = useState(1.0);
-  const [lineOpacityFactor, setLineOpacityFactor] = useState(1.0);
-  const [lineSpeedFactor, setLineSpeedFactor] = useState(1.0);
+  const [lineDensityFactor, setLineDensityFactor] = useState(0.5);
+  const [lineOpacityFactor, setLineOpacityFactor] = useState(0.5);
+  const [lineSpeedFactor, setLineSpeedFactor] = useState(0.5);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0); // 1x playback speed for date animation
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
@@ -118,17 +124,32 @@ export default function TorMap() {
     }
     // Clear country hover if countries are hidden
     if (!newVisibility.countries) {
-      setCountryHover(null);
+      countryHoverRef.current = null;
+      if (countryTooltipRef.current) {
+        countryTooltipRef.current.style.opacity = '0';
+      }
     }
   }, []);
   
   // Country data state
   const [countryData, setCountryData] = useState<CountryHistogram>({});
   const [countryGeojson, setCountryGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [countryHover, setCountryHover] = useState<{ code: string; x: number; y: number } | null>(null);
+  
+  // Country hover state - using ref to avoid re-renders for tooltip movement
+  const countryHoverRef = useRef<{ code: string; x: number; y: number } | null>(null);
+  const countryHover = countryHoverRef.current; // compatibility
+
   
   // Track previously known dates to detect new ones
   const prevDatesRef = useRef<string[]>([]);
+
+  // Ref for the interactive map container (DOM throttling removed)
+  const interactiveContainerRef = useRef<HTMLDivElement>(null);
+
+  // NOTE: DOM event throttling removed.
+  // With Worker particles + Optimized Tooltips (no-mount), the performance impact 
+  // of 60fps picking is negligible, and throttling caused "stuck" tooltips 
+  // because the "exit" events were being dropped.
 
   // Debounced URL updater for map location (300ms delay to avoid spamming during pan/zoom)
   // Also clears CC (country code) since user is manually navigating away from that country
@@ -155,6 +176,8 @@ export default function TorMap() {
   // Fetch index and return new date if found
   const fetchIndexData = useCallback(async (): Promise<string | null> => {
     try {
+      setLoadingStatus('Loading index...');
+      setLoadingProgress(10);
       const { data: index, source } = await fetchWithFallback<DateIndex>('index.json');
       if (source === 'fallback') {
         console.info('[TorMap] Using fallback data source for index');
@@ -219,6 +242,7 @@ export default function TorMap() {
   useEffect(() => {
     async function loadCountryGeoJson() {
       try {
+        setLoadingStatus('Loading map data...');
         // Try to load from local first, then fallback
         let response;
         try {
@@ -238,6 +262,8 @@ export default function TorMap() {
             // Territory mappings for regions with "-99" or missing ISO codes
             // Maps territory name patterns to their ISO alpha-2 codes
             const territoryMap: Record<string, string> = {
+              'france': 'FR',
+              'norway': 'NO',
               'french guiana': 'GF',
               'guyane': 'GF',
               'martinique': 'MQ',
@@ -265,9 +291,21 @@ export default function TorMap() {
               const isValidCode = code && /^[A-Za-z]{2}$/.test(code);
               
               if (!isValidCode) {
-                // Fallback to 3-letter conversion
-                const code3 = props.iso_a3 || props.ISO_A3 || props.adm0_a3 || props['ISO3166-1-Alpha-3'];
-                if (code3 && /^[A-Za-z]{3}$/.test(code3) && threeToTwo[code3.toUpperCase()]) {
+                // Fallback to 3-letter conversion (iterate all possible keys to find a valid alpha-3 code)
+                // This handles cases where iso_a3 might be "-99" but adm0_a3 is "FRA"
+                const candidates3 = [
+                  props.iso_a3,
+                  props.ISO_A3,
+                  props.adm0_a3,
+                  props['ISO3166-1-Alpha-3'],
+                  props.sov_a3,
+                  props.gu_a3,
+                  props.su_a3
+                ];
+                
+                const code3 = candidates3.find(c => c && typeof c === 'string' && /^[A-Za-z]{3}$/.test(c));
+                
+                if (code3 && threeToTwo[code3.toUpperCase()]) {
                   code = threeToTwo[code3.toUpperCase()];
                 } else {
                   // Last resort: try to match territory by name
@@ -289,6 +327,7 @@ export default function TorMap() {
           }
           
           setCountryGeojson(geojson);
+          setLoadingProgress(prev => Math.max(prev, 20));
         }
       } catch (err) {
         console.warn('Could not load country GeoJSON:', err);
@@ -304,12 +343,14 @@ export default function TorMap() {
     
     async function loadCountryData() {
       try {
+        setLoadingStatus('Loading country stats...');
         const { data, source } = await fetchWithFallback<{ countries?: CountryHistogram }>(`countries-${currentDate}.json`);
         if (source === 'fallback') {
           console.info(`[TorMap] Using fallback for country data ${currentDate}`);
         }
         // data.countries is the CountryHistogram: { "US": 444507, "DE": 224891, ... }
         setCountryData(data.countries || data as CountryHistogram);
+        setLoadingProgress(prev => Math.max(prev, 90));
       } catch (err) {
         console.warn('Could not load country data:', err);
         setCountryData({});
@@ -318,6 +359,14 @@ export default function TorMap() {
     
     loadCountryData();
   }, [currentDate]);
+
+  // Smooth completion of loading
+  useEffect(() => {
+    if (!initialLoading && mapLoaded) {
+      setLoadingProgress(100);
+      setLoadingStatus('Ready');
+    }
+  }, [initialLoading, mapLoaded]);
 
   // Trigger relay fade-in transition
   const startRelayTransition = useCallback(() => {
@@ -354,18 +403,24 @@ export default function TorMap() {
 
     async function fetchRelays() {
       setLoading(true);
+      setLoadingStatus('Downloading relay data...');
+      // Progress handler: map 0-1 download progress to 30-70% total loading
+      const onProgress = (p: number) => setLoadingProgress(30 + p * 40);
+
       try {
         // Try flat structure first, then current/ subdirectory
         let result;
         try {
-          result = await fetchWithFallback<RelayData>(`relays-${currentDate}.json`);
+          result = await fetchWithFallback<RelayData>(`relays-${currentDate}.json`, { onProgress });
         } catch {
-          result = await fetchWithFallback<RelayData>(`current/relays-${currentDate}.json`);
+          result = await fetchWithFallback<RelayData>(`current/relays-${currentDate}.json`, { onProgress });
         }
         
         if (result.source === 'fallback') {
           console.info(`[TorMap] Using fallback for relay data ${currentDate}`);
         }
+        
+        setLoadingStatus('Processing data...');
         
         // Check if data actually changed (different day)
         const dataChanged = prevRelayDataRef.current !== null && 
@@ -373,6 +428,7 @@ export default function TorMap() {
         
         prevRelayDataRef.current = result.data;
         setRelayData(result.data);
+        setLoadingProgress(prev => Math.max(prev, 70));
         setError(null);
         
         // Trigger fade-in if data changed
@@ -410,42 +466,92 @@ export default function TorMap() {
   // Handle click on relay marker
   const handleClick = useCallback((info: PickingInfo) => {
     if (info.object) {
-      setSelectedNode(info.object as AggregatedNode);
+      const node = info.object as AggregatedNode;
+      setSelectedNode(node);
       setPopupPosition({ x: info.x, y: info.y });
-    } else {
-      setSelectedNode(null);
-      setPopupPosition(null);
+      
+      // Find country name from location
+      if (countryGeojson) {
+        const name = findCountryAtLocation(node.lng, node.lat, countryGeojson);
+        setSelectedCountryName(name);
+      } else {
+        setSelectedCountryName(null);
+      }
+      return true; // Stop propagation to DeckGL onClick
     }
-  }, []);
+    return false;
+  }, [countryGeojson]);
 
   // Handle hover - throttled to reduce picking overhead during particle animation
   // Deck.gl's picking causes GPU readback on every mouse move, which blocks animation
+  // Optimized: Using refs to update DOM directly instead of React state for smoother tooltips
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const countryTooltipRef = useRef<HTMLDivElement>(null);
+  
   const handleHover = useCallback((info: PickingInfo) => {
     if (info.object) {
-      setHoverInfo({
-        node: info.object as AggregatedNode,
-        x: info.x,
-        y: info.y,
-      });
+      const node = info.object as AggregatedNode;
+      // Only trigger re-render if the NODE changes
+      if (!hoverInfo || hoverInfo.node !== node) {
+        setHoverInfo({
+          node,
+          x: info.x,
+          y: info.y,
+        });
+      } else if (tooltipRef.current) {
+        // Manually update position without re-render
+        tooltipRef.current.style.left = `${info.x + 10}px`;
+        tooltipRef.current.style.top = `${info.y + 10}px`;
+      }
     } else {
-      setHoverInfo(null);
+      // Only clear if we were previously hovering
+      if (hoverInfo) {
+        setHoverInfo(null);
+      }
     }
-  }, []);
+  }, [hoverInfo]);
 
   // Close popup
   const handleClosePopup = useCallback(() => {
     setSelectedNode(null);
     setPopupPosition(null);
+    setSelectedCountryName(null);
   }, []);
 
-  // Handle country hover - also throttled for consistency
+  // Handle background click to close popup
+  const handleDeckClick = useCallback((info: PickingInfo) => {
+    if (!info.object) {
+      handleClosePopup();
+    }
+  }, [handleClosePopup]);
+
+  // Handle country hover - completely ref-based for zero lag
   const handleCountryHover = useCallback((code: string | null, x: number, y: number) => {
     if (code) {
-      setCountryHover({ code, x, y });
+      countryHoverRef.current = { code, x, y };
+      
+      if (countryTooltipRef.current) {
+        // Update content directly in DOM to avoid React render cycle
+        // Note: We need specific class names in CountryTooltip to target elements
+        const nameEl = countryTooltipRef.current.querySelector('.country-name');
+        const countEl = countryTooltipRef.current.querySelector('.country-count');
+        const count = countryData[code] || 0;
+        
+        if (nameEl) nameEl.textContent = code;
+        if (countEl) countEl.textContent = `${count.toLocaleString()} clients`;
+        
+        // Update position and show
+        countryTooltipRef.current.style.left = `${x + 10}px`;
+        countryTooltipRef.current.style.top = `${y + 10}px`;
+        countryTooltipRef.current.style.opacity = '1';
+      }
     } else {
-      setCountryHover(null);
+      countryHoverRef.current = null;
+      if (countryTooltipRef.current) {
+        countryTooltipRef.current.style.opacity = '0';
+      }
     }
-  }, []);
+  }, [countryData]);
 
   // Handle country click - center on country and update URL
   const handleCountryClick = useCallback((code: string, name: string) => {
@@ -469,6 +575,16 @@ export default function TorMap() {
     // TODO: Show country statistics popup (outlier chart)
   }, []);
 
+  // Cleanup country tooltip when layer is disabled
+  useEffect(() => {
+    if (!layerVisibility.countries) {
+      countryHoverRef.current = null;
+      if (countryTooltipRef.current) {
+        countryTooltipRef.current.style.opacity = '0';
+      }
+    }
+  }, [layerVisibility.countries]);
+
   // Check if we have actual relay nodes to display
   const hasRelayNodes = !!(relayData && relayData.nodes && relayData.nodes.length > 0);
   
@@ -489,7 +605,8 @@ export default function TorMap() {
     ...getZoomPixelConstraints(viewState.zoom),
   }), [viewState.zoom]);
 
-  // Particle layer - smaller dots with opacity (only if we have relay nodes)
+  // OLD: Particle layer - smaller dots with opacity (only if we have relay nodes)
+  /*
   const { layers: particleLayers, progress: particleProgress, isGenerating: isGeneratingParticles } = useParticleLayer({
     nodes: relayData?.nodes ?? [],
     visible: layerVisibility.particles && hasRelayNodes,
@@ -502,6 +619,7 @@ export default function TorMap() {
     lineDensityFactor,
     lineOpacityFactor,
   });
+  */
 
   // Create static layers (without particles to avoid re-render loops)
   const baseLayers = useMemo(() => {
@@ -541,10 +659,15 @@ export default function TorMap() {
           getRadius: (d: AggregatedNode) =>
             calculateNodeRadius(d, viewState.zoom, maxRelayCount, maxBandwidth),
           getFillColor: (d: AggregatedNode) => {
-            // Color by relay type: Exit (orange) > Guard (deep green) > Middle (mint green)
+            // Use pre-calculated type for efficient rendering (no iteration needed)
+            if (d.type) {
+              if (d.type === 'exit') return config.relayColors.exit;
+              if (d.type === 'guard') return config.relayColors.guard;
+              return config.relayColors.middle;
+            }
+            // Fallback for legacy data (calculated on the fly)
             const hasExit = d.relays.some(r => r.flags.includes('E'));
             const hasGuard = d.relays.some(r => r.flags.includes('G'));
-            
             if (hasExit) return config.relayColors.exit;
             if (hasGuard) return config.relayColors.guard;
             return config.relayColors.middle;
@@ -566,8 +689,10 @@ export default function TorMap() {
   }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
 
   // Combine base layers with particle layer (particle layer updates independently)
-  const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
+  // const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
+  const layers = baseLayers;
 
+  /*
   // Initial Loading state (only shown on first load)
   if (initialLoading && !relayData) {
     return (
@@ -579,6 +704,7 @@ export default function TorMap() {
       </div>
     );
   }
+  */
 
   // Error state (only shown if no data at all)
   if (error && !relayData) {
@@ -597,29 +723,55 @@ export default function TorMap() {
   }
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full" ref={interactiveContainerRef}>
+      {/* Startup Overlay - covers everything during initialization */}
+      <StartupOverlay
+        visible={initialLoading || !mapLoaded}
+        progress={loadingProgress}
+        status={loadingStatus}
+      />
+
+      {/* Interactive Map - Active layer */}
       <DeckGL
         viewState={viewState}
         onViewStateChange={handleViewStateChange}
         controller={true}
         layers={layers}
+        onClick={handleDeckClick} // Handle background clicks
         // Use our throttled hover state for cursor instead of Deck.gl's internal picking
         // This avoids the expensive isHovering check on every mouse move
         getCursor={() => hoverInfo ? 'pointer' : 'grab'}
+        style={{ zIndex: '1' }} // Ensure map is below UI but handles interaction
       >
         <Map
           mapStyle={config.mapStyle}
           attributionControl={true}
+          onLoad={() => setMapLoaded(true)}
         />
       </DeckGL>
+
+      {/* Offscreen Particle Canvas (Rendered independently via Worker) */}
+      <ParticleCanvas
+        nodes={relayData?.nodes ?? []}
+        viewState={viewState}
+        width={typeof window !== 'undefined' ? window.innerWidth : 800}
+        height={typeof window !== 'undefined' ? window.innerHeight : 600}
+        visible={layerVisibility.particles && hasRelayNodes}
+        density={lineDensityFactor}
+        opacity={lineOpacityFactor}
+        speed={lineSpeedFactor}
+        trafficType={trafficType}
+      />
 
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
       
-      {/* Particle generation progress */}
+      {/* Particle generation progress (disabled for now as worker handles it silently) */}
+      {/* 
       {isGeneratingParticles && particleProgress !== null && (
         <LoadingBar progress={particleProgress} label="Generating particles" />
       )}
+      */}
       
       {/* No relay data toast - shown when data was fetched but has no nodes, or no dates available */}
       {!loading && !initialLoading && (
@@ -630,41 +782,50 @@ export default function TorMap() {
         ) : null
       )}
 
-      {/* Hover tooltip */}
-      {hoverInfo && !selectedNode && (
-        <div
-          className="absolute pointer-events-none bg-black/40 backdrop-blur-md text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-tor-green/30 z-10"
-          style={{
-            left: hoverInfo.x + 10,
-            top: hoverInfo.y + 10,
-          }}
-        >
-          <div className="font-medium text-tor-green">{hoverInfo.node.label}</div>
-          <div className="text-gray-400 text-xs">
-            {hoverInfo.node.relays.length} relay{hoverInfo.node.relays.length !== 1 ? 's' : ''}
-          </div>
-        </div>
-      )}
+      {/* Hover tooltip - Always rendered but hidden when not active to prevent mounting lag */}
+      <div
+        ref={tooltipRef}
+        className="absolute pointer-events-none bg-black/40 backdrop-blur-md text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-tor-green/30 z-10 transition-opacity duration-75"
+        style={{
+          left: 0,
+          top: 0,
+          opacity: (hoverInfo && !selectedNode) ? 1 : 0,
+        }}
+      >
+        {hoverInfo && (
+          <>
+            <div className="font-medium text-tor-green">{hoverInfo.node.label}</div>
+            <div className="text-gray-400 text-xs">
+              {hoverInfo.node.relays.length} relay{hoverInfo.node.relays.length !== 1 ? 's' : ''}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Relay popup */}
       {selectedNode && popupPosition && (
         <RelayPopup
           node={selectedNode}
+          countryName={selectedCountryName}
           x={popupPosition.x}
           y={popupPosition.y}
           onClose={handleClosePopup}
         />
       )}
 
-      {/* Country hover tooltip */}
-      {countryHover && layerVisibility.countries && (
-        <CountryTooltip
-          countryCode={countryHover.code}
-          countryData={countryData}
-          x={countryHover.x}
-          y={countryHover.y}
-        />
-      )}
+      {/* Country hover tooltip - Always rendered but hidden when not active */}
+      <CountryTooltip
+        ref={countryTooltipRef}
+        countryCode=""
+        countryData={countryData}
+        x={0}
+        y={0}
+        style={{
+          opacity: 0,
+          pointerEvents: 'none',
+          zIndex: 60
+        }}
+      />
 
       {/* Header + Layer Controls - top left */}
       <div className="absolute top-4 left-4 z-10">
@@ -729,7 +890,7 @@ export default function TorMap() {
               <span className="text-gray-600 text-[9px]">– intermediate</span>
             </div>
             <div className="flex items-center gap-1.5 text-[10px] mt-1">
-              <span className="w-2 h-2 rounded-full bg-purple-400" />
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.hidden.slice(0, 3).join(',')})` }} />
               <span className="text-gray-400">HSDir</span>
               <span className="text-gray-600 text-[9px]">– hidden services</span>
             </div>
@@ -798,125 +959,19 @@ export default function TorMap() {
         </button>
 
         {/* Settings Panel (Popup) */}
-        {showSettings && (
-          <div className="absolute bottom-0 left-10 ml-2 bg-black/80 backdrop-blur-md rounded-lg p-3 border border-tor-green/20 w-48 shadow-lg animate-fade-in">
-            
-            {/* Traffic Type Section */}
-            <h3 className="text-tor-green text-xs font-bold mb-3 uppercase tracking-wider">Traffic Type</h3>
-            <div className="flex gap-1 mb-3">
-              <button
-                onClick={() => setTrafficType('all')}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
-                  trafficType === 'all'
-                    ? 'bg-cyan-500 text-black'
-                    : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                }`}
-              >
-                All
-              </button>
-              <button
-                onClick={() => setTrafficType('general')}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
-                  trafficType === 'general'
-                    ? 'bg-tor-green text-black'
-                    : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                }`}
-              >
-                <span className="flex items-center justify-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-[#00ff88]" />
-                  General
-                </span>
-              </button>
-              <button
-                onClick={() => setTrafficType('hidden')}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
-                  trafficType === 'hidden'
-                    ? 'bg-tor-orange text-black'
-                    : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                }`}
-              >
-                <span className="flex items-center justify-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-[#ff6600]" />
-                  Hidden
-                </span>
-              </button>
-            </div>
-
-            {/* Line Settings Section */}
-            <h3 className="text-tor-green text-xs font-bold mb-3 mt-4 pt-3 border-t border-white/10 uppercase tracking-wider">Line Settings</h3>
-            
-            {/* Density Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Density</span>
-                <span>{(lineDensityFactor * 100).toFixed(0)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="6.0"
-                step="0.1"
-                value={lineDensityFactor}
-                onChange={(e) => setLineDensityFactor(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-
-            {/* Opacity Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Opacity</span>
-                <span>{(lineOpacityFactor * 100).toFixed(0)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="6.0"
-                step="0.1"
-                value={lineOpacityFactor}
-                onChange={(e) => setLineOpacityFactor(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-
-            {/* Speed Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Speed</span>
-                <span>{(lineSpeedFactor * 100).toFixed(0)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="5.0"
-                step="0.1"
-                value={lineSpeedFactor}
-                onChange={(e) => setLineSpeedFactor(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-
-            {/* Playback Section */}
-            <h3 className="text-tor-green text-xs font-bold mb-3 mt-4 pt-3 border-t border-white/10 uppercase tracking-wider">Playback</h3>
-            
-            {/* Playback Speed Slider */}
-            <div className="mb-3">
-              <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                <span>Speed</span>
-                <span>{playbackSpeed}x</span>
-              </div>
-              <input
-                type="range"
-                min="0.1"
-                max="4"
-                step="0.1"
-                value={playbackSpeed}
-                onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-              />
-            </div>
-          </div>
-        )}
+        <SettingsPanel
+          show={showSettings}
+          trafficType={trafficType}
+          setTrafficType={setTrafficType}
+          density={lineDensityFactor}
+          setDensity={setLineDensityFactor}
+          opacity={lineOpacityFactor}
+          setOpacity={setLineOpacityFactor}
+          speed={lineSpeedFactor}
+          setSpeed={setLineSpeedFactor}
+          playbackSpeed={playbackSpeed}
+          setPlaybackSpeed={setPlaybackSpeed}
+        />
 
         <button
           onClick={() => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }))}

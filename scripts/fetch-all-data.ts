@@ -1634,6 +1634,13 @@ function buildProcessedData(
     
     bucket.relays.sort((a, b) => b.bandwidth - a.bandwidth);
     
+    // Pre-calculate node properties for efficient client rendering
+    const isExit = bucket.relays.some(r => r.flags.includes('E'));
+    const isGuard = bucket.relays.some(r => r.flags.includes('G'));
+    const isHSDir = bucket.relays.some(r => r.flags.includes('H'));
+    
+    const type = isExit ? 'exit' : (isGuard ? 'guard' : 'middle');
+    
     nodes.push({
       lat: bucket.lat,
       lng: bucket.lng,
@@ -1643,6 +1650,8 @@ function buildProcessedData(
       normalized_bandwidth: totalBandwidth > 0 ? bandwidth / totalBandwidth : 0,
       label,
       relays: bucket.relays,
+      type,
+      isHSDir,
     });
   }
   

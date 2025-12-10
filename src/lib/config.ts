@@ -88,9 +88,9 @@ export const config = {
 
   // Relay marker colors (RGBA 0-255)
   relayColors: {
-    guard: [0, 200, 80, 220] as [number, number, number, number],       // Deep forest green - entry nodes
-    exit: [255, 102, 0, 220] as [number, number, number, number],       // Orange - exit nodes
-    middle: [80, 220, 255, 200] as [number, number, number, number],    // Cyan/teal - middle relays
+    guard: [0, 240, 255, 220] as [number, number, number, number],      // Cyan - entry nodes
+    exit: [255, 136, 0, 220] as [number, number, number, number],       // Orange - exit nodes
+    middle: [0, 255, 136, 200] as [number, number, number, number],     // Green - middle relays (matches flow)
     hidden: [139, 92, 246, 200] as [number, number, number, number],    // Purple - hidden service dir
   },
 

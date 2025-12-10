@@ -22,6 +22,10 @@ export interface AggregatedNode {
   normalized_bandwidth: number; // For probabilistic particle distribution
   label: string;               // Summary: "RelayName" or "N relays at location"
   relays: RelayInfo[];         // Individual relays for popup
+  
+  // Pre-computed properties for efficient rendering
+  type: 'exit' | 'guard' | 'middle';
+  isHSDir: boolean;
 }
 
 // Date index from storage

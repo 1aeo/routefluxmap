@@ -14,6 +14,59 @@ interface FetchResult<T> {
   source: 'local' | 'primary' | 'fallback';
 }
 
+interface FetchOptions extends RequestInit {
+  onProgress?: (progress: number) => void;
+}
+
+/**
+ * Helper to fetch with progress tracking
+ */
+async function fetchWithProgress<T>(url: string, options?: FetchOptions): Promise<T> {
+  const response = await fetch(url, options);
+  
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  // If no progress callback or no content-length, fallback to standard json()
+  const contentLength = response.headers.get('Content-Length');
+  if (!options?.onProgress || !contentLength) {
+    return response.json();
+  }
+
+  const total = parseInt(contentLength, 10);
+  let loaded = 0;
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return response.json();
+  }
+
+  const chunks: Uint8Array[] = [];
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    if (value) {
+      chunks.push(value);
+      loaded += value.length;
+      options.onProgress(Math.min(1.0, loaded / total));
+    }
+  }
+
+  // Reassemble JSON
+  const allChunks = new Uint8Array(loaded);
+  let position = 0;
+  for (const chunk of chunks) {
+    allChunks.set(chunk, position);
+    position += chunk.length;
+  }
+  
+  const text = new TextDecoder('utf-8').decode(allChunks);
+  return JSON.parse(text);
+}
+
 /**
  * Fetch data with automatic fallback
  * 
@@ -24,18 +77,15 @@ interface FetchResult<T> {
  */
 export async function fetchWithFallback<T>(
   path: string,
-  options?: RequestInit
+  options?: FetchOptions
 ): Promise<FetchResult<T>> {
   const errors: string[] = [];
 
   // 1. Try local first (for dev or bundled data)
   try {
     const localPath = path.startsWith('/') ? path : `/data/${path}`;
-    const response = await fetch(localPath, options);
-    if (response.ok) {
-      const data = await response.json();
-      return { data, source: 'local' };
-    }
+    const data = await fetchWithProgress<T>(localPath, options);
+    return { data, source: 'local' };
   } catch {
     // Local not available, continue to remote
   }
@@ -44,12 +94,8 @@ export async function fetchWithFallback<T>(
   if (PRIMARY_DATA_URL) {
     try {
       const url = `${PRIMARY_DATA_URL}/${path}`;
-      const response = await fetch(url, options);
-      if (response.ok) {
-        const data = await response.json();
-        return { data, source: 'primary' };
-      }
-      errors.push(`Primary (${response.status})`);
+      const data = await fetchWithProgress<T>(url, options);
+      return { data, source: 'primary' };
     } catch (err: any) {
       errors.push(`Primary (${err.message})`);
     }
@@ -59,13 +105,9 @@ export async function fetchWithFallback<T>(
   if (FALLBACK_DATA_URL) {
     try {
       const url = `${FALLBACK_DATA_URL}/${path}`;
-      const response = await fetch(url, options);
-      if (response.ok) {
-        const data = await response.json();
-        console.info(`[DataFetch] Using fallback for ${path}`);
-        return { data, source: 'fallback' };
-      }
-      errors.push(`Fallback (${response.status})`);
+      const data = await fetchWithProgress<T>(url, options);
+      console.info(`[DataFetch] Using fallback for ${path}`);
+      return { data, source: 'fallback' };
     } catch (err: any) {
       errors.push(`Fallback (${err.message})`);
     }
@@ -210,4 +252,3 @@ export function createUpdateChecker(
     },
   };
 }
-

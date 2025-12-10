@@ -5,6 +5,7 @@
 
 import { GeoJsonLayer } from '@deck.gl/layers';
 import type { CountryHistogram } from '../../lib/types';
+import { forwardRef } from 'react';
 
 interface CountryLayerOptions {
   countryData: CountryHistogram;
@@ -119,26 +120,31 @@ interface CountryTooltipProps {
   countryData: CountryHistogram;
   x: number;
   y: number;
+  style?: React.CSSProperties;
 }
 
-export function CountryTooltip({ countryCode, countryData, x, y }: CountryTooltipProps) {
-  const count = countryData[countryCode] || 0;
-  
-  return (
-    <div
-      className="absolute pointer-events-none bg-black/90 text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-purple-500/30 z-10"
-      style={{
-        left: x + 10,
-        top: y + 10,
-      }}
-    >
-      <div className="font-medium text-purple-400">{countryCode}</div>
-      <div className="text-gray-400">
-        {count.toLocaleString()} clients
+export const CountryTooltip = forwardRef<HTMLDivElement, CountryTooltipProps>(
+  ({ countryCode, countryData, x, y, style }, ref) => {
+    const count = countryData[countryCode] || 0;
+    
+    return (
+      <div
+        ref={ref}
+        className="absolute pointer-events-none bg-black/90 text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-purple-500/30 z-10 transition-opacity duration-75"
+        style={{
+          left: x + 10,
+          top: y + 10,
+          ...style
+        }}
+      >
+        <div className="font-medium text-purple-400 country-name">{countryCode}</div>
+        <div className="text-gray-400 country-count">
+          {count.toLocaleString()} clients
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
+);
 
 // Utility to format country data for display
 export function formatCountryStats(countryData: CountryHistogram): {

@@ -42,6 +42,65 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * Check if a point (lng, lat) is inside a polygon ring
+ * Uses Ray Casting algorithm
+ */
+function isPointInPolygon(point: [number, number], vs: [number, number][]): boolean {
+  const x = point[0], y = point[1];
+  let inside = false;
+  for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+    const xi = vs[i][0], yi = vs[i][1];
+    const xj = vs[j][0], yj = vs[j][1];
+    
+    const intersect = ((yi > y) !== (yj > y))
+        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Find country name from GeoJSON features for a given location
+ * Guaranteed to match visual representation on the map
+ */
+export function findCountryAtLocation(lng: number, lat: number, geojson: GeoJSON.FeatureCollection): string | null {
+  if (!geojson || !geojson.features) return null;
+
+  for (const feature of geojson.features) {
+    if (!feature.geometry) continue;
+
+    // Simple bounding box check could go here for optimization, but we'll skip for simplicity
+    
+    let isInside = false;
+    const geom = feature.geometry;
+
+    if (geom.type === 'Polygon') {
+      // coords is [ring1, ring2...]
+      const coords = geom.coordinates;
+      if (isPointInPolygon([lng, lat], coords[0] as [number, number][])) {
+        isInside = true;
+      }
+    } else if (geom.type === 'MultiPolygon') {
+      // coords is [[ring...], [ring...]]
+      const coords = geom.coordinates;
+      for (const polygon of coords) {
+        if (isPointInPolygon([lng, lat], polygon[0] as [number, number][])) {
+          isInside = true;
+          break;
+        }
+      }
+    }
+
+    if (isInside) {
+      // Return the name property
+      return feature.properties?.name || feature.properties?.NAME || feature.properties?.admin || null;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Country code conversion maps
  */
 export const twoToThree: Record<string, string> = {
@@ -171,7 +230,7 @@ export const countryCentroids: Record<string, [number, number]> = {
  * Get fallback coordinates from country code
  * Adds jitter to prevent stacking
  */
-export function getCountryCoords(countryCode: string): { lat: number; lng: number } {
+export function getCountryCoords(countryCode?: string): { lat: number; lng: number } {
   const cc = (countryCode || 'US').toUpperCase();
   const coords = countryCentroids[cc] || countryCentroids['US'];
   return {
