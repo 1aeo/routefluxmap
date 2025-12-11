@@ -22,11 +22,14 @@ interface ToggleProps {
 }
 
 function Toggle({ label, icon, checked, onChange, color = '#00ff88' }: ToggleProps) {
+  const inputId = `toggle-${label.toLowerCase().replace(/\s+/g, '-')}`;
   return (
-    <label className="flex items-center gap-2 cursor-pointer group">
+    <label htmlFor={inputId} className="flex items-center gap-2 cursor-pointer group">
       <div className="relative">
         <input
           type="checkbox"
+          id={inputId}
+          name={inputId}
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
           className="sr-only"

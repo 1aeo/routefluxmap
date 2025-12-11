@@ -16,7 +16,9 @@ deploy/config.env
 deploy/logs/
 
 # Data files (fetched/generated, not source-controlled)
-public/data/
+# Ignore all files in public/data except countries.geojson (static asset)
+public/data/*
+!public/data/countries.geojson
 data/cache/
 data/output/
 

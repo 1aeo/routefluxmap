@@ -251,13 +251,12 @@ export default function TorMap() {
     async function loadCountryGeoJson() {
       try {
         setLoadingStatus('Loading map data...');
-        // Try to load from local first, then fallback
+        // Try to load from local first, then fallback to CDN
         let response;
         try {
           response = await fetch('/data/countries.geojson');
           if (!response.ok) throw new Error('Local not found');
         } catch {
-          // Use a simplified world geojson (we'll create this)
           response = await fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson');
         }
         
