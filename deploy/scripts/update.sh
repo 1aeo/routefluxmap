@@ -247,7 +247,91 @@ FETCH_OPTS=""
 # Step 3: Fetch with Incremental Uploads
 # ============================================================================
 
-if [[ "$UPLOAD_INTERVAL" -eq 0 ]]; then
+# For year mode, run parallel processes for each quarter (4 concurrent Node.js processes)
+if [[ "$RUN_MODE" == "year" ]]; then
+    YEAR="20${DATE_RANGE}"
+    log "🚀 PARALLEL YEAR MODE: Running 4 quarters concurrently"
+    log ""
+    
+    INITIAL_COUNT=$(get_date_count)
+    LAST_UPLOAD_COUNT=$INITIAL_COUNT
+    
+    # Start Q1-Q4 as parallel processes
+    declare -a QUARTER_PIDS=()
+    for Q in 1 2 3 4; do
+        case $Q in
+            1) MONTHS="01/01/${DATE_RANGE}-03/31/${DATE_RANGE}" ;;
+            2) MONTHS="04/01/${DATE_RANGE}-06/30/${DATE_RANGE}" ;;
+            3) MONTHS="07/01/${DATE_RANGE}-09/30/${DATE_RANGE}" ;;
+            4) MONTHS="10/01/${DATE_RANGE}-12/31/${DATE_RANGE}" ;;
+        esac
+        
+        log "   Starting Q${Q} ($MONTHS)..."
+        npx tsx scripts/fetch-all-data.ts "$MONTHS" --parallel=8 &
+        QUARTER_PIDS+=($!)
+    done
+    
+    log ""
+    log "   Q1 PID: ${QUARTER_PIDS[0]}"
+    log "   Q2 PID: ${QUARTER_PIDS[1]}"
+    log "   Q3 PID: ${QUARTER_PIDS[2]}"
+    log "   Q4 PID: ${QUARTER_PIDS[3]}"
+    log ""
+    log "   Monitoring progress (upload every $UPLOAD_INTERVAL days)..."
+    log ""
+    
+    # Monitor all quarters, upload periodically
+    while true; do
+        # Check if any quarter is still running
+        RUNNING=0
+        for PID in "${QUARTER_PIDS[@]}"; do
+            if kill -0 "$PID" 2>/dev/null; then
+                RUNNING=$((RUNNING + 1))
+            fi
+        done
+        
+        if [[ "$RUNNING" -eq 0 ]]; then
+            break
+        fi
+        
+        sleep 10
+        
+        CURRENT_COUNT=$(get_date_count)
+        NEW_DAYS=$((CURRENT_COUNT - LAST_UPLOAD_COUNT))
+        
+        if [[ "$NEW_DAYS" -ge "$UPLOAD_INTERVAL" ]]; then
+            log "📊 Progress: $CURRENT_COUNT dates (+$NEW_DAYS) - $RUNNING quarters still running"
+            run_uploads "Incremental upload"
+            LAST_UPLOAD_COUNT=$CURRENT_COUNT
+        fi
+    done
+    
+    # Check exit status of all quarters
+    FAILED=0
+    for i in 0 1 2 3; do
+        EXIT_CODE=0
+        wait "${QUARTER_PIDS[$i]}" || EXIT_CODE=$?
+        if [[ "$EXIT_CODE" -ne 0 ]]; then
+            log "   ⚠ Q$((i+1)) failed (exit $EXIT_CODE)"
+            FAILED=$((FAILED + 1))
+        else
+            log "   ✓ Q$((i+1)) completed"
+        fi
+    done
+    
+    if [[ "$FAILED" -gt 0 ]]; then
+        log "❌ $FAILED quarter(s) failed"
+    else
+        log "✅ All quarters completed successfully"
+    fi
+    
+    # Final upload
+    FINAL_COUNT=$(get_date_count)
+    TOTAL_NEW=$((FINAL_COUNT - INITIAL_COUNT))
+    log "📊 Final: $FINAL_COUNT dates ($TOTAL_NEW new)"
+    run_uploads "Final upload"
+
+elif [[ "$UPLOAD_INTERVAL" -eq 0 ]]; then
     # Simple mode: fetch, then upload once at end
     log "📡 Fetching data..."
     

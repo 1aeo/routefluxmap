@@ -56,7 +56,7 @@ const VERSION = '1.0.0';
 // Parallel defaults based on workload type
 const DEFAULT_PARALLEL_DAY = 1;
 const DEFAULT_PARALLEL_MONTH = 8;
-const DEFAULT_PARALLEL_YEAR = 12;  // Reduced from 15 to avoid overwhelming servers
+const DEFAULT_PARALLEL_YEAR = 16;  // Increased for faster processing
 
 // XZ decompression threads (configurable via --threads=N)
 // Testing showed -T4 and -T0 have identical speed, but -T4 uses 33% less RAM
@@ -74,7 +74,7 @@ const DOWNLOAD_STALL_MS = 15000;        // 15s stall detection (no data received
 const COUNTRY_FETCH_TIMEOUT_MS = 180000; // 3 min timeout for country data (API is slow)
 
 // Concurrency limits
-const MAX_COUNTRY_FETCH_CONCURRENCY = 3;  // Max concurrent country data fetches
+const MAX_COUNTRY_FETCH_CONCURRENCY = 6;  // Max concurrent country data fetches
 
 // ============================================================================
 // Types
@@ -150,7 +150,7 @@ interface DateIndex {
 interface DateRange {
   start: Date;
   end: Date;
-  mode: 'day' | 'month' | 'year';
+  mode: 'day' | 'month' | 'year' | 'range';
   description: string;
 }
 
@@ -457,6 +457,21 @@ function parseDateRange(input: string): DateRange {
     return { start: date, end: date, mode: 'day', description: dateStr };
   }
   
+  // Range format: mm/dd/yy-mm/dd/yy (for parallel quarter processing)
+  const rangeMatch = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})-(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (rangeMatch) {
+    const [, sm, sd, sy, em, ed, ey] = rangeMatch;
+    const startYear = currentCentury + parseInt(sy, 10);
+    const endYear = currentCentury + parseInt(ey, 10);
+    const start = new Date(startYear, parseInt(sm, 10) - 1, parseInt(sd, 10));
+    const end = new Date(endYear, parseInt(em, 10) - 1, parseInt(ed, 10));
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) throw new Error(`Invalid range: ${input}`);
+    return {
+      start, end, mode: 'range',
+      description: `${start.toISOString().slice(0, 10)} to ${end.toISOString().slice(0, 10)}`,
+    };
+  }
+  
   // mm/dd/yy format
   const dayMatch = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
   if (dayMatch) {
@@ -500,7 +515,7 @@ function parseDateRange(input: string): DateRange {
     return { start: date, end: date, mode: 'day', description: date.toISOString().slice(0, 10) };
   }
   
-  throw new Error(`Unrecognized date format: ${input}. Use mm/dd/yy, mm/yy, or yy`);
+  throw new Error(`Unrecognized date format: ${input}. Use mm/dd/yy, mm/yy, yy, or mm/dd/yy-mm/dd/yy`);
 }
 
 function generateDatesInRange(range: DateRange): string[] {
@@ -609,27 +624,6 @@ const downloadLocks: Map<string, Promise<string | null>> = new Map();
 const extractionLocks: Map<string, Promise<string | null>> = new Map();
 const descriptorParseLocks: Map<string, Promise<Map<string, BandwidthEntry[]>>> = new Map();
 const countryFetchLocks: Map<string, Promise<Map<string, CountryData>>> = new Map();
-
-// Semaphore for limiting concurrent country fetches
-let activeCountryFetches = 0;
-const countryFetchQueue: (() => void)[] = [];
-
-async function withCountryFetchLimit<T>(operation: () => Promise<T>): Promise<T> {
-  // Wait if at max concurrency
-  if (activeCountryFetches >= MAX_COUNTRY_FETCH_CONCURRENCY) {
-    await new Promise<void>(resolve => countryFetchQueue.push(resolve));
-  }
-  
-  activeCountryFetches++;
-  try {
-    return await operation();
-  } finally {
-    activeCountryFetches--;
-    // Release next waiting operation
-    const next = countryFetchQueue.shift();
-    if (next) next();
-  }
-}
 
 async function withLock<T>(
   locks: Map<string, Promise<T>>,
@@ -1530,7 +1524,7 @@ function fetchDailyCountryDataOnce(date: string): Promise<CountryData> {
 
 /**
  * Load monthly country data with caching.
- * Uses lock to prevent duplicate fetches and semaphore to limit concurrency.
+ * Uses lock to prevent duplicate fetches.
  * Tries batch request first, falls back to daily if batch fails.
  */
 async function loadMonthlyCountryData(year: number, month: number): Promise<Map<string, CountryData>> {
@@ -1548,31 +1542,28 @@ async function loadMonthlyCountryData(year: number, month: number): Promise<Map<
       return monthlyCountryCache.get(monthStr)!;
     }
     
-    // Use semaphore to limit concurrent country fetches
-    return withCountryFetchLimit(async () => {
-      // Try batch request with retries
-      try {
-        const data = await withRetry(
-          () => fetchMonthlyCountryDataOnce(year, month),
-          `Monthly country data ${monthStr}`,
-          3  // 3 retries for batch
-        );
-        
-        if (data.size > 0) {
-          console.log(`    ✓ Loaded country data for ${monthStr} (${data.size} days, batch)`);
-          monthlyCountryCache.set(monthStr, data);
-          return data;
-        }
-      } catch (e: any) {
-        console.log(`    ⚠ Batch country fetch failed for ${monthStr}: ${e.message}`);
-        console.log(`    ↳ Falling back to daily requests`);
-      }
+    // Try batch request with retries
+    try {
+      const data = await withRetry(
+        () => fetchMonthlyCountryDataOnce(year, month),
+        `Monthly country data ${monthStr}`,
+        3  // 3 retries for batch
+      );
       
-      // Return empty map - will fall back to daily requests
-      const emptyMap = new Map<string, CountryData>();
-      monthlyCountryCache.set(monthStr, emptyMap);
-      return emptyMap;
-    });
+      if (data.size > 0) {
+        console.log(`    ✓ Loaded country data for ${monthStr} (${data.size} days, batch)`);
+        monthlyCountryCache.set(monthStr, data);
+        return data;
+      }
+    } catch (e: any) {
+      console.log(`    ⚠ Batch country fetch failed for ${monthStr}: ${e.message}`);
+      console.log(`    ↳ Falling back to daily requests`);
+    }
+    
+    // Return empty map - will fall back to daily requests
+    const emptyMap = new Map<string, CountryData>();
+    monthlyCountryCache.set(monthStr, emptyMap);
+    return emptyMap;
   });
 }
 
@@ -1898,6 +1889,7 @@ async function main() {
         parallel = DEFAULT_PARALLEL_YEAR;
         break;
       case 'month':
+      case 'range':  // Range mode (quarters) uses month-level parallelism
         parallel = DEFAULT_PARALLEL_MONTH;
         break;
       default:
@@ -1940,6 +1932,36 @@ async function main() {
   
   const startTime = Date.now();
   
+  // Get unique months for pre-fetching
+  const months = [...new Set(targetDates.map(d => d.slice(0, 7)))].sort();
+  
+  // For multi-month runs, pre-fetch everything to avoid repeated downloads/parsing
+  if (months.length > 1) {
+    console.log('\n━━━ Pre-fetching Data ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    
+    // Download, extract, and parse each month sequentially (CPU-bound work)
+    for (const monthStr of months) {
+      const [year, month] = monthStr.split('-').map(Number);
+      console.log(`  Processing ${monthStr}...`);
+      
+      // Download archives
+      await Promise.all([
+        ensureConsensusArchive(year, month),
+        ensureDescriptorArchive(year, month)
+      ]);
+      
+      // Extract and parse
+      await ensureExtractedConsensus(year, month);
+      await loadDescriptorBandwidth(year, month);
+      await loadMonthlyCountryData(year, month);
+      
+      console.log(`    ✓ ${monthStr} ready`);
+    }
+    
+    const prefetchTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n  ✓ Pre-fetch complete in ${prefetchTime}s`);
+  }
+  
   // Process dates
   console.log('\n━━━ Fetching Data ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   
@@ -1948,6 +1970,7 @@ async function main() {
     await processDate(targetDates[0]);
   } else {
     // Multiple dates - process in parallel
+    console.log(`\n  Processing ${targetDates.length} dates (${parallel} parallel)...\n`);
     await runParallel(
       targetDates.map(date => () => processDate(date)),
       parallel

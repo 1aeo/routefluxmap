@@ -43,4 +43,7 @@ Thumbs.db
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Cloudflare Wrangler
+.wrangler/
 wrangler.toml
