@@ -107,6 +107,7 @@ export default function TorMap() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0); // 1x playback speed for date animation
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
+  const [pathMode, setPathMode] = useState<'city' | 'country'>('city'); // City or Country path mode
   
   // Relay transition state for smooth fading
   const [relayOpacity, setRelayOpacity] = useState(1);
@@ -761,6 +762,7 @@ export default function TorMap() {
         opacity={lineOpacityFactor}
         speed={lineSpeedFactor}
         trafficType={trafficType}
+        pathMode={pathMode}
       />
 
       {/* Update notification */}
@@ -961,6 +963,8 @@ export default function TorMap() {
         {/* Settings Panel (Popup) */}
         <SettingsPanel
           show={showSettings}
+          pathMode={pathMode}
+          setPathMode={setPathMode}
           trafficType={trafficType}
           setTrafficType={setTrafficType}
           density={lineDensityFactor}

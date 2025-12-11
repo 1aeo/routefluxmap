@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { MapViewState } from '@deck.gl/core';
 import type { AggregatedNode } from '../../lib/types';
+import { countryCentroids } from '../../lib/utils/geo';
 
 interface ParticleCanvasProps {
   nodes: AggregatedNode[];
@@ -12,6 +13,7 @@ interface ParticleCanvasProps {
   opacity?: number;
   speed?: number;
   trafficType?: 'all' | 'hidden' | 'general';
+  pathMode?: 'city' | 'country';
 }
 
 export default function ParticleCanvas({
@@ -23,7 +25,8 @@ export default function ParticleCanvas({
   density = 1.0,
   opacity = 1.0,
   speed = 1.0,
-  trafficType = 'all'
+  trafficType = 'all',
+  pathMode = 'city'
 }: ParticleCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -46,7 +49,8 @@ export default function ParticleCanvas({
       canvas: offscreen,
       width,
       height,
-      pixelRatio: window.devicePixelRatio
+      pixelRatio: window.devicePixelRatio,
+      countryCentroids // Pass centroids for country mode
     }, [offscreen]);
 
     return () => {
@@ -100,7 +104,7 @@ export default function ParticleCanvas({
     });
   }, [width, height]);
 
-  // Update Settings (Density, Opacity, Speed, Traffic Type)
+  // Update Settings (Density, Opacity, Speed, Traffic Type, Path Mode)
   useEffect(() => {
     if (!workerRef.current) return;
     
@@ -109,9 +113,10 @@ export default function ParticleCanvas({
       density,
       opacity,
       speed,
-      trafficType
+      trafficType,
+      pathMode
     });
-  }, [density, opacity, speed, trafficType]);
+  }, [density, opacity, speed, trafficType, pathMode]);
 
   return (
     <canvas
