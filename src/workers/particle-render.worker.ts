@@ -29,6 +29,8 @@ interface WorkerMessage {
   opacity?: number;
   speed?: number;
   trafficType?: 'all' | 'hidden' | 'general';
+  pathMode?: 'city' | 'country';
+  countryCentroids?: Record<string, [number, number]>;
 }
 
 interface Route {
@@ -80,9 +82,16 @@ let currentDensity = 1.0;
 let currentOpacity = 1.0;
 let currentSpeedFactor = 1.0;
 let currentTrafficType = 'all';
+let currentPathMode: 'city' | 'country' = 'city';
 let currentViewState: ViewState = { longitude: 0, latitude: 0, zoom: 1, width: 800, height: 600 };
 let devicePixelRatio = 1;
 let startTime = 0;
+
+// Country centroids for country mode (lng, lat)
+let countryCentroids: Record<string, [number, number]> = {};
+
+// Raw nodes before aggregation (for switching modes without re-fetching)
+let rawNodes: { lng: number; lat: number; isHSDir: boolean; bandwidth: number }[] = [];
 
 // --- Shaders ---
 const LINE_VS = `#version 300 es
@@ -158,6 +167,60 @@ function getTierForRank(rank: number): [number, number] {
     if (rank < threshold) return [lines, particles];
   }
   return [1, 1];
+}
+
+// Find nearest country centroid for a given lng/lat
+function findNearestCountry(lng: number, lat: number): string | null {
+  let minDist = Infinity;
+  let nearest: string | null = null;
+  for (const [code, [cLng, cLat]] of Object.entries(countryCentroids)) {
+    const dx = lng - cLng, dy = lat - cLat;
+    const dist = dx * dx + dy * dy;
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = code;
+    }
+  }
+  return nearest;
+}
+
+// Aggregate nodes by country centroid
+function aggregateNodesByCountry(): typeof nodes {
+  if (!Object.keys(countryCentroids).length) return rawNodes.map(n => {
+    const [x, y] = projectToWorld(n.lng, n.lat);
+    return { x, y, isHSDir: n.isHSDir, bandwidth: n.bandwidth };
+  });
+
+  // Group nodes by nearest country
+  const countryGroups: Record<string, { bandwidth: number; isHSDir: boolean; count: number }> = {};
+  
+  for (const n of rawNodes) {
+    const code = findNearestCountry(n.lng, n.lat);
+    if (!code) continue;
+    
+    if (!countryGroups[code]) {
+      countryGroups[code] = { bandwidth: 0, isHSDir: false, count: 0 };
+    }
+    countryGroups[code].bandwidth += n.bandwidth;
+    countryGroups[code].isHSDir = countryGroups[code].isHSDir || n.isHSDir;
+    countryGroups[code].count++;
+  }
+
+  // Convert to node array using country centroids
+  const aggregated: typeof nodes = [];
+  for (const [code, group] of Object.entries(countryGroups)) {
+    const centroid = countryCentroids[code];
+    if (!centroid) continue;
+    const [x, y] = projectToWorld(centroid[0], centroid[1]);
+    aggregated.push({
+      x, y,
+      isHSDir: group.isHSDir,
+      bandwidth: group.bandwidth / group.count // Average bandwidth per relay
+    });
+  }
+  
+  console.log(`[ParticleWorker] Aggregated ${rawNodes.length} nodes into ${aggregated.length} countries`);
+  return aggregated;
 }
 
 function createShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader | null {
@@ -285,7 +348,6 @@ function generateAllRoutes() {
     });
   }
 
-  console.log(`[ParticleWorker] Generated ${allRoutes.length} routes`);
   allRoutes.sort((a, b) => b.bandwidthScore - a.bandwidthScore);
   const len = allRoutes.length - 1 || 1;
   for (let i = 0; i < allRoutes.length; i++) allRoutes[i].bandwidthRank = i / len;
@@ -436,44 +498,69 @@ function animate(now: number) {
   requestAnimationFrame(animate);
 }
 
+// --- Node Processing ---
+function processNodes() {
+  if (currentPathMode === 'country') {
+    nodes = aggregateNodesByCountry();
+  } else {
+    nodes = rawNodes.map(n => {
+      const [x, y] = projectToWorld(n.lng, n.lat);
+      return { x, y, isHSDir: n.isHSDir, bandwidth: n.bandwidth };
+    });
+  }
+  rebuildBuffers();
+}
+
 // --- Message Handler ---
 self.onmessage = (e: MessageEvent<WorkerMessage>) => {
-  const { type, canvas: offscreen, nodes: rawNodes, viewState, width, height, pixelRatio, density, opacity, speed, trafficType } = e.data;
+  const msg = e.data;
 
-  if (type === 'init' && offscreen) {
-    canvas = offscreen;
-    devicePixelRatio = pixelRatio || 1;
+  if (msg.type === 'init' && msg.canvas) {
+    canvas = msg.canvas;
+    devicePixelRatio = msg.pixelRatio || 1;
+    if (msg.countryCentroids) countryCentroids = msg.countryCentroids;
     initWebGL();
     requestAnimationFrame(animate);
   }
 
-  if (type === 'updateNodes' && rawNodes) {
-    nodes = rawNodes.map(n => {
-      const [x, y] = projectToWorld(n.lng, n.lat);
-      return { x, y, isHSDir: !!n.isHSDir, bandwidth: n.normalized_bandwidth ?? 0 };
-    });
-    rebuildBuffers();
+  if (msg.type === 'updateNodes' && msg.nodes) {
+    // Store raw nodes for mode switching
+    rawNodes = msg.nodes.map(n => ({
+      lng: n.lng, lat: n.lat,
+      isHSDir: !!n.isHSDir,
+      bandwidth: n.normalized_bandwidth ?? 0
+    }));
+    processNodes();
   }
 
-  if (type === 'updateViewState' && viewState) {
-    currentViewState = { ...currentViewState, ...viewState };
+  if (msg.type === 'updateViewState' && msg.viewState) {
+    currentViewState = { ...currentViewState, ...msg.viewState };
   }
 
-  if (type === 'resize' && width && height) {
-    currentViewState.width = width;
-    currentViewState.height = height;
+  if (msg.type === 'resize' && msg.width && msg.height) {
+    currentViewState.width = msg.width;
+    currentViewState.height = msg.height;
     if (canvas) {
-      canvas.width = width * devicePixelRatio;
-      canvas.height = height * devicePixelRatio;
+      canvas.width = msg.width * devicePixelRatio;
+      canvas.height = msg.height * devicePixelRatio;
     }
   }
 
-  if (type === 'updateSettings') {
-    const densityChanged = density !== undefined && density !== currentDensity;
-    if (density !== undefined) currentDensity = density;
-    if (opacity !== undefined) currentOpacity = opacity;
-    if (speed !== undefined) currentSpeedFactor = speed;
-    if (trafficType !== undefined) currentTrafficType = trafficType;
-    if (densityChanged && allRoutes.length) rebuildBuffersForDensity();
+  if (msg.type === 'updateSettings') {
+    const densityChanged = msg.density !== undefined && msg.density !== currentDensity;
+    const pathModeChanged = msg.pathMode !== undefined && msg.pathMode !== currentPathMode;
+    
+    if (msg.density !== undefined) currentDensity = msg.density;
+    if (msg.opacity !== undefined) currentOpacity = msg.opacity;
+    if (msg.speed !== undefined) currentSpeedFactor = msg.speed;
+    if (msg.trafficType !== undefined) currentTrafficType = msg.trafficType;
+    if (msg.pathMode !== undefined) currentPathMode = msg.pathMode;
+    
+    // Path mode change requires full rebuild with re-aggregation
+    if (pathModeChanged && rawNodes.length) {
+      processNodes();
+    } else if (densityChanged && allRoutes.length) {
+      rebuildBuffersForDensity();
+    }
   }
 };

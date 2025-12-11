@@ -1,7 +1,7 @@
-import { config } from '../../lib/config';
-
 interface SettingsPanelProps {
   show: boolean;
+  pathMode: 'city' | 'country';
+  setPathMode: (mode: 'city' | 'country') => void;
   trafficType: 'all' | 'hidden' | 'general';
   setTrafficType: (type: 'all' | 'hidden' | 'general') => void;
   density: number;
@@ -16,6 +16,8 @@ interface SettingsPanelProps {
 
 export default function SettingsPanel({
   show,
+  pathMode,
+  setPathMode,
   trafficType,
   setTrafficType,
   density,
@@ -35,9 +37,36 @@ export default function SettingsPanel({
       {/* TRAFFIC SETTINGS Header */}
       <h3 className="text-tor-green text-xs font-bold mb-3 uppercase tracking-wider">Traffic Settings</h3>
       
-      {/* Type Selector */}
+      {/* Path Mode Selector */}
       <div className="mb-3">
-        <div className="text-[10px] text-gray-400 mb-1">Type</div>
+        <div className="text-[10px] text-gray-400 mb-1">Path Mode</div>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setPathMode('city')}
+            className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+              pathMode === 'city'
+                ? 'bg-tor-green text-black'
+                : 'bg-white/10 text-gray-400 hover:bg-white/20'
+            }`}
+          >
+            City
+          </button>
+          <button
+            onClick={() => setPathMode('country')}
+            className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+              pathMode === 'country'
+                ? 'bg-tor-green text-black'
+                : 'bg-white/10 text-gray-400 hover:bg-white/20'
+            }`}
+          >
+            Country
+          </button>
+        </div>
+      </div>
+
+      {/* Traffic Type Selector */}
+      <div className="mb-3">
+        <div className="text-[10px] text-gray-400 mb-1">Traffic Type</div>
         <div className="flex gap-1">
           <button
             onClick={() => setTrafficType('all')}
