@@ -12,8 +12,8 @@ interface CountryLayerOptions {
   geojson: GeoJSON.FeatureCollection | null;
   visible: boolean;
   opacity?: number;
-  onClick?: (countryCode: string, countryName: string) => void;
-  onHover?: (countryCode: string | null, x: number, y: number) => void;
+  // Note: onClick and onHover removed - using JS point-in-polygon instead (TorFlow approach)
+  // This eliminates expensive GPU readPixels() on every mouse move
 }
 
 // Color scale from dark to bright green
@@ -44,8 +44,6 @@ export function createCountryLayer({
   geojson,
   visible,
   opacity = 0.6,
-  onClick,
-  onHover,
 }: CountryLayerOptions): GeoJsonLayer | null {
   // Return null only if there's no geojson data - but always create the layer
   // even when not visible to keep geometry in GPU memory and avoid re-parsing lag
@@ -58,8 +56,10 @@ export function createCountryLayer({
   return new GeoJsonLayer({
     id: 'countries',
     data: geojson,
-    visible, // Control visibility through Deck.gl's built-in prop for instant toggling
-    pickable: visible, // Only pickable when visible
+    visible,
+    // TorFlow approach: Disable GPU picking entirely - use JS point-in-polygon instead
+    // This eliminates expensive readPixels() GPU readback on every mouse move
+    pickable: false,
     stroked: true,
     filled: true,
     extruded: false,
@@ -80,32 +80,6 @@ export function createCountryLayer({
     
     getLineColor: [0, 100, 50, 100], // Dark green border
     getLineWidth: 1,
-    
-    // Hover styling
-    autoHighlight: true,
-    highlightColor: [255, 255, 255, 100],
-    
-    // Event handlers
-    onClick: (info: any) => {
-      if (info.object && onClick) {
-        const cc = getCountryCode(info.object);
-        const name = getCountryName(info.object);
-        if (cc) {
-          onClick(cc, name);
-        }
-      }
-    },
-    
-    onHover: (info: any) => {
-      if (onHover) {
-        if (info.object) {
-          const cc = getCountryCode(info.object);
-          onHover(cc, info.x, info.y);
-        } else {
-          onHover(null, 0, 0);
-        }
-      }
-    },
     
     updateTriggers: {
       getFillColor: [countryData, maxCount],

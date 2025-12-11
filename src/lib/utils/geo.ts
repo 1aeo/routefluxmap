@@ -60,28 +60,29 @@ function isPointInPolygon(point: [number, number], vs: [number, number][]): bool
 }
 
 /**
- * Find country name from GeoJSON features for a given location
+ * Find country info from GeoJSON features for a given location
  * Guaranteed to match visual representation on the map
+ * Returns { code, name } or null if not found
  */
-export function findCountryAtLocation(lng: number, lat: number, geojson: GeoJSON.FeatureCollection): string | null {
+export function findCountryAtLocation(
+  lng: number, 
+  lat: number, 
+  geojson: GeoJSON.FeatureCollection
+): { code: string; name: string } | null {
   if (!geojson || !geojson.features) return null;
 
   for (const feature of geojson.features) {
     if (!feature.geometry) continue;
-
-    // Simple bounding box check could go here for optimization, but we'll skip for simplicity
     
     let isInside = false;
     const geom = feature.geometry;
 
     if (geom.type === 'Polygon') {
-      // coords is [ring1, ring2...]
       const coords = geom.coordinates;
       if (isPointInPolygon([lng, lat], coords[0] as [number, number][])) {
         isInside = true;
       }
     } else if (geom.type === 'MultiPolygon') {
-      // coords is [[ring...], [ring...]]
       const coords = geom.coordinates;
       for (const polygon of coords) {
         if (isPointInPolygon([lng, lat], polygon[0] as [number, number][])) {
@@ -92,8 +93,10 @@ export function findCountryAtLocation(lng: number, lat: number, geojson: GeoJSON
     }
 
     if (isInside) {
-      // Return the name property
-      return feature.properties?.name || feature.properties?.NAME || feature.properties?.admin || null;
+      const props = feature.properties;
+      const code = props?.iso_a2 || props?.ISO_A2 || props?.cc2 || null;
+      const name = props?.name || props?.NAME || props?.admin || 'Unknown';
+      return code ? { code, name } : null;
     }
   }
 

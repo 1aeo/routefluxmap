@@ -146,6 +146,13 @@ export default function TorMap() {
 
   // Ref for the interactive map container (DOM throttling removed)
   const interactiveContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Ref to access DeckGL viewport for coordinate unprojection
+  const deckRef = useRef<any>(null);
+  
+  // Throttle timer for country hover detection
+  const countryHoverTimerRef = useRef<number | null>(null);
+  const lastCountryCodeRef = useRef<string | null>(null);
 
   // NOTE: DOM event throttling removed.
   // With Worker particles + Optimized Tooltips (no-mount), the performance impact 
@@ -473,8 +480,8 @@ export default function TorMap() {
       
       // Find country name from location
       if (countryGeojson) {
-        const name = findCountryAtLocation(node.lng, node.lat, countryGeojson);
-        setSelectedCountryName(name);
+        const country = findCountryAtLocation(node.lng, node.lat, countryGeojson);
+        setSelectedCountryName(country?.name ?? null);
       } else {
         setSelectedCountryName(null);
       }
@@ -526,14 +533,12 @@ export default function TorMap() {
     }
   }, [handleClosePopup]);
 
-  // Handle country hover - completely ref-based for zero lag
-  const handleCountryHover = useCallback((code: string | null, x: number, y: number) => {
+  // Update country tooltip DOM directly (no React state) for zero lag
+  const updateCountryTooltip = useCallback((code: string | null, x: number, y: number) => {
     if (code) {
       countryHoverRef.current = { code, x, y };
       
       if (countryTooltipRef.current) {
-        // Update content directly in DOM to avoid React render cycle
-        // Note: We need specific class names in CountryTooltip to target elements
         const nameEl = countryTooltipRef.current.querySelector('.country-name');
         const countEl = countryTooltipRef.current.querySelector('.country-count');
         const count = countryData[code] || 0;
@@ -541,7 +546,6 @@ export default function TorMap() {
         if (nameEl) nameEl.textContent = code;
         if (countEl) countEl.textContent = `${count.toLocaleString()} clients`;
         
-        // Update position and show
         countryTooltipRef.current.style.left = `${x + 10}px`;
         countryTooltipRef.current.style.top = `${y + 10}px`;
         countryTooltipRef.current.style.opacity = '1';
@@ -554,27 +558,83 @@ export default function TorMap() {
     }
   }, [countryData]);
 
-  // Handle country click - center on country and update URL
-  const handleCountryClick = useCallback((code: string, name: string) => {
-    const centroid = countryCentroids[code];
-    if (centroid) {
-      const [lng, lat] = centroid;
-      setViewState(prev => ({
-        ...prev,
-        longitude: lng,
-        latitude: lat,
-        zoom: COUNTRY_ZOOM,
-      }));
-      
-      // Update URL with country code and map location in one batch
-      // This prevents multiple history entries/thrashing
-      updateUrlHash({
-        'CC': code,
-        'ML': formatMapLocation(lng, lat, COUNTRY_ZOOM)
-      });
+  // TorFlow approach: JavaScript point-in-polygon for country hover (no GPU picking)
+  // This completely eliminates the expensive readPixels() GPU readback
+  const handleCountryMouseMove = useCallback((event: React.MouseEvent) => {
+    // Skip if countries layer is hidden or no geojson
+    if (!layerVisibility.countries || !countryGeojson) {
+      if (lastCountryCodeRef.current) {
+        updateCountryTooltip(null, 0, 0);
+        lastCountryCodeRef.current = null;
+      }
+      return;
     }
-    // TODO: Show country statistics popup (outlier chart)
-  }, []);
+
+    // Throttle to ~15fps (66ms) - fast enough for smooth tooltip, cheap on CPU
+    if (countryHoverTimerRef.current) return;
+    
+    countryHoverTimerRef.current = window.setTimeout(() => {
+      countryHoverTimerRef.current = null;
+      
+      // Get viewport from deck.gl to unproject screen coords to lng/lat
+      const deck = deckRef.current?.deck;
+      if (!deck) return;
+      
+      const viewport = deck.getViewports()[0];
+      if (!viewport) return;
+      
+      // Unproject screen coordinates to [lng, lat]
+      const [lng, lat] = viewport.unproject([event.nativeEvent.offsetX, event.nativeEvent.offsetY]);
+      
+      // Use point-in-polygon to find country (runs on CPU, no GPU readback)
+      const country = findCountryAtLocation(lng, lat, countryGeojson);
+      const code = country?.code ?? null;
+      
+      // Only update tooltip if country changed
+      if (code !== lastCountryCodeRef.current) {
+        lastCountryCodeRef.current = code;
+        updateCountryTooltip(code, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
+      } else if (code) {
+        // Same country, just update position
+        if (countryTooltipRef.current) {
+          countryTooltipRef.current.style.left = `${event.nativeEvent.offsetX + 10}px`;
+          countryTooltipRef.current.style.top = `${event.nativeEvent.offsetY + 10}px`;
+        }
+      }
+    }, 66);
+  }, [layerVisibility.countries, countryGeojson, updateCountryTooltip]);
+
+  // Handle country click - center on country and update URL
+  const handleCountryClick = useCallback((event: React.MouseEvent) => {
+    if (!layerVisibility.countries || !countryGeojson) return;
+    
+    const deck = deckRef.current?.deck;
+    if (!deck) return;
+    
+    const viewport = deck.getViewports()[0];
+    if (!viewport) return;
+    
+    const [lng, lat] = viewport.unproject([event.nativeEvent.offsetX, event.nativeEvent.offsetY]);
+    const country = findCountryAtLocation(lng, lat, countryGeojson);
+    
+    if (country) {
+      const centroid = countryCentroids[country.code];
+      if (centroid) {
+        const [cLng, cLat] = centroid;
+        setViewState(prev => ({
+          ...prev,
+          longitude: cLng,
+          latitude: cLat,
+          zoom: COUNTRY_ZOOM,
+        }));
+        
+        updateUrlHash({
+          'CC': country.code,
+          'ML': formatMapLocation(cLng, cLat, COUNTRY_ZOOM)
+        });
+      }
+    }
+  }, [layerVisibility.countries, countryGeojson]);
 
   // Cleanup country tooltip when layer is disabled
   useEffect(() => {
@@ -634,8 +694,8 @@ export default function TorMap() {
       geojson: countryGeojson,
       visible: layerVisibility.countries,
       opacity: 0.5,
-      onHover: handleCountryHover,
-      onClick: handleCountryClick,
+      // Note: Country hover/click handled via JS point-in-polygon (TorFlow approach)
+      // This eliminates expensive GPU readPixels() on every mouse move
     });
     if (countryLayer) {
       result.push(countryLayer);
@@ -687,7 +747,7 @@ export default function TorMap() {
     }
     
     return result;
-  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, handleCountryHover, handleCountryClick, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
+  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
 
   // Combine base layers with particle layer (particle layer updates independently)
   // const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
@@ -733,23 +793,30 @@ export default function TorMap() {
       />
 
       {/* Interactive Map - Active layer */}
-      <DeckGL
-        viewState={viewState}
-        onViewStateChange={handleViewStateChange}
-        controller={true}
-        layers={layers}
-        onClick={handleDeckClick} // Handle background clicks
-        // Use our throttled hover state for cursor instead of Deck.gl's internal picking
-        // This avoids the expensive isHovering check on every mouse move
-        getCursor={() => hoverInfo ? 'pointer' : 'grab'}
-        style={{ zIndex: '1' }} // Ensure map is below UI but handles interaction
+      {/* Wrapper div for country hover/click detection via JS point-in-polygon (TorFlow approach) */}
+      <div 
+        onMouseMove={handleCountryMouseMove}
+        onClick={layerVisibility.countries ? handleCountryClick : undefined}
+        style={{ position: 'absolute', inset: 0, zIndex: 1 }}
       >
-        <Map
-          mapStyle={config.mapStyle}
-          attributionControl={true}
-          onLoad={() => setMapLoaded(true)}
-        />
-      </DeckGL>
+        <DeckGL
+          ref={deckRef}
+          viewState={viewState}
+          onViewStateChange={handleViewStateChange}
+          controller={true}
+          layers={layers}
+          onClick={handleDeckClick} // Handle background clicks
+          // Use our throttled hover state for cursor instead of Deck.gl's internal picking
+          getCursor={() => hoverInfo || lastCountryCodeRef.current ? 'pointer' : 'grab'}
+          style={{ position: 'relative' }}
+        >
+          <Map
+            mapStyle={config.mapStyle}
+            attributionControl={true}
+            onLoad={() => setMapLoaded(true)}
+          />
+        </DeckGL>
+      </div>
 
       {/* Offscreen Particle Canvas (Rendered independently via Worker) */}
       <ParticleCanvas

@@ -348,7 +348,6 @@ function generateAllRoutes() {
     });
   }
 
-  console.log(`[ParticleWorker] Generated ${allRoutes.length} routes`);
   allRoutes.sort((a, b) => b.bandwidthScore - a.bandwidthScore);
   const len = allRoutes.length - 1 || 1;
   for (let i = 0; i < allRoutes.length; i++) allRoutes[i].bandwidthRank = i / len;
