@@ -19,7 +19,7 @@ STORAGE_NAME="R2"
 
 # R2 configuration
 R2_BUCKET_NAME="${R2_BUCKET:?R2_BUCKET must be set in config.env}"
-BUCKET="r2:${R2_BUCKET_NAME}"
+BUCKET="r2-rfm:${R2_BUCKET_NAME}"
 
 LOCAL_BACKUP_MARKER="$LOG_DIR/last-local-backup-date"
 R2_BACKUP_MARKER="$LOG_DIR/last-r2-backup-date"
@@ -37,9 +37,9 @@ ensure_r2_remote() {
     
     ensure_rclone
     
-    if ! $RCLONE listremotes 2>/dev/null | grep -q "^r2:$"; then
-        log "📦 Configuring rclone 'r2' remote..."
-        $RCLONE config create r2 s3 \
+    if ! $RCLONE listremotes 2>/dev/null | grep -q "^r2-rfm:$"; then
+        log "📦 Configuring rclone 'r2-rfm' remote..."
+        $RCLONE config create r2-rfm s3 \
             provider=Cloudflare \
             access_key_id="$r2_key" \
             secret_access_key="$r2_secret" \
@@ -47,7 +47,7 @@ ensure_r2_remote() {
             acl=private \
             no_check_bucket=true \
             --non-interactive
-        log "   ✅ Remote 'r2' configured"
+        log "   ✅ Remote 'r2-rfm' configured"
     fi
 }
 
