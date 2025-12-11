@@ -21,8 +21,9 @@ export default function StartupOverlay({ progress, status, visible }: StartupOve
       return () => clearTimeout(timer);
     } else {
       setShouldRender(true);
-      // Small delay to ensure fade-in transition works if mounting
-      requestAnimationFrame(() => setOpacity(1));
+      // Set opacity directly - CSS transition handles animation
+      // Avoid requestAnimationFrame during initial load as it can conflict with heavy work
+      setOpacity(1);
     }
   }, [visible]);
 

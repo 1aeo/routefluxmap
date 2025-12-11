@@ -138,8 +138,6 @@ export default function TorMap() {
   
   // Country hover state - using ref to avoid re-renders for tooltip movement
   const countryHoverRef = useRef<{ code: string; x: number; y: number } | null>(null);
-  const countryHover = countryHoverRef.current; // compatibility
-
   
   // Track previously known dates to detect new ones
   const prevDatesRef = useRef<string[]>([]);
@@ -153,6 +151,19 @@ export default function TorMap() {
   // Throttle timer for country hover detection
   const countryHoverTimerRef = useRef<number | null>(null);
   const lastCountryCodeRef = useRef<string | null>(null);
+  
+  // Cleanup timer on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (countryHoverTimerRef.current) clearTimeout(countryHoverTimerRef.current);
+    };
+  }, []);
+  
+  // Helper to unproject screen coords to [lng, lat] via deck.gl viewport
+  const unprojectCoords = useCallback((x: number, y: number): [number, number] | null => {
+    const viewport = deckRef.current?.deck?.getViewports()[0];
+    return viewport ? viewport.unproject([x, y]) : null;
+  }, []);
 
   // NOTE: DOM event throttling removed.
   // With Worker particles + Optimized Tooltips (no-mount), the performance impact 
@@ -263,11 +274,10 @@ export default function TorMap() {
         if (response.ok) {
           const geojson = await response.json();
           
-          // Normalize country codes once on load
-          // This avoids repeated complex lookups in the rendering loop
+          // Normalize country codes in chunks to avoid blocking the main thread
+          // This prevents requestAnimationFrame violations during loading
           if (geojson.features) {
             // Territory mappings for regions with "-99" or missing ISO codes
-            // Maps territory name patterns to their ISO alpha-2 codes
             const territoryMap: Record<string, string> = {
               'france': 'FR',
               'norway': 'NO',
@@ -289,33 +299,22 @@ export default function TorMap() {
               'northern mariana': 'MP',
             };
             
-            geojson.features.forEach((feature: any) => {
+            // Process a single feature (extracted for chunking)
+            const processFeature = (feature: any) => {
               const props = feature.properties || {};
-              // Try direct 2-letter codes (skip invalid codes like "-99")
               let code = props.iso_a2 || props.ISO_A2 || props.cc2 || props['ISO3166-1-Alpha-2'];
-              
-              // Validate: must be exactly 2 alphabetic characters
               const isValidCode = code && /^[A-Za-z]{2}$/.test(code);
               
               if (!isValidCode) {
-                // Fallback to 3-letter conversion (iterate all possible keys to find a valid alpha-3 code)
-                // This handles cases where iso_a3 might be "-99" but adm0_a3 is "FRA"
                 const candidates3 = [
-                  props.iso_a3,
-                  props.ISO_A3,
-                  props.adm0_a3,
-                  props['ISO3166-1-Alpha-3'],
-                  props.sov_a3,
-                  props.gu_a3,
-                  props.su_a3
+                  props.iso_a3, props.ISO_A3, props.adm0_a3,
+                  props['ISO3166-1-Alpha-3'], props.sov_a3, props.gu_a3, props.su_a3
                 ];
-                
                 const code3 = candidates3.find(c => c && typeof c === 'string' && /^[A-Za-z]{3}$/.test(c));
                 
                 if (code3 && threeToTwo[code3.toUpperCase()]) {
                   code = threeToTwo[code3.toUpperCase()];
                 } else {
-                  // Last resort: try to match territory by name
                   const name = (props.name || props.NAME || props.admin || '').toLowerCase();
                   for (const [pattern, territoryCode] of Object.entries(territoryMap)) {
                     if (name.includes(pattern)) {
@@ -326,15 +325,42 @@ export default function TorMap() {
                 }
               }
               
-              // Standardize to iso_a2 (only if valid)
               if (code && /^[A-Za-z]{2}$/.test(code)) {
                 feature.properties.iso_a2 = code.toUpperCase();
               }
-            });
+            };
+            
+            // Process features in chunks to avoid blocking animation frames
+            const CHUNK_SIZE = 50;
+            const features = geojson.features;
+            let index = 0;
+            
+            const processChunk = () => {
+              const end = Math.min(index + CHUNK_SIZE, features.length);
+              for (; index < end; index++) {
+                processFeature(features[index]);
+              }
+              
+              if (index < features.length) {
+                // Use requestIdleCallback if available, else setTimeout
+                if ('requestIdleCallback' in self) {
+                  (self as any).requestIdleCallback(processChunk, { timeout: 50 });
+                } else {
+                  setTimeout(processChunk, 0);
+                }
+              } else {
+                // All features processed
+                setCountryGeojson(geojson);
+                setLoadingProgress(prev => Math.max(prev, 20));
+              }
+            };
+            
+            // Start chunked processing
+            processChunk();
+          } else {
+            setCountryGeojson(geojson);
+            setLoadingProgress(prev => Math.max(prev, 20));
           }
-          
-          setCountryGeojson(geojson);
-          setLoadingProgress(prev => Math.max(prev, 20));
         }
       } catch (err) {
         console.warn('Could not load country GeoJSON:', err);
@@ -560,7 +586,6 @@ export default function TorMap() {
   // TorFlow approach: JavaScript point-in-polygon for country hover (no GPU picking)
   // This completely eliminates the expensive readPixels() GPU readback
   const handleCountryMouseMove = useCallback((event: React.MouseEvent) => {
-    // Skip if countries layer is hidden or no geojson
     if (!layerVisibility.countries || !countryGeojson) {
       if (lastCountryCodeRef.current) {
         updateCountryTooltip(null, 0, 0);
@@ -572,68 +597,51 @@ export default function TorMap() {
     // Throttle to ~15fps (66ms) - fast enough for smooth tooltip, cheap on CPU
     if (countryHoverTimerRef.current) return;
     
+    const { offsetX, offsetY } = event.nativeEvent;
     countryHoverTimerRef.current = window.setTimeout(() => {
       countryHoverTimerRef.current = null;
       
-      // Get viewport from deck.gl to unproject screen coords to lng/lat
-      const deck = deckRef.current?.deck;
-      if (!deck) return;
+      const coords = unprojectCoords(offsetX, offsetY);
+      if (!coords) return;
       
-      const viewport = deck.getViewports()[0];
-      if (!viewport) return;
-      
-      // Unproject screen coordinates to [lng, lat]
-      const [lng, lat] = viewport.unproject([event.nativeEvent.offsetX, event.nativeEvent.offsetY]);
-      
-      // Use point-in-polygon to find country (runs on CPU, no GPU readback)
-      const country = findCountryAtLocation(lng, lat, countryGeojson);
+      const country = findCountryAtLocation(coords[0], coords[1], countryGeojson);
       const code = country?.code ?? null;
       
-      // Only update tooltip if country changed
       if (code !== lastCountryCodeRef.current) {
         lastCountryCodeRef.current = code;
-        updateCountryTooltip(code, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
-      } else if (code) {
+        updateCountryTooltip(code, offsetX, offsetY);
+      } else if (code && countryTooltipRef.current) {
         // Same country, just update position
-        if (countryTooltipRef.current) {
-          countryTooltipRef.current.style.left = `${event.nativeEvent.offsetX + 10}px`;
-          countryTooltipRef.current.style.top = `${event.nativeEvent.offsetY + 10}px`;
-        }
+        countryTooltipRef.current.style.left = `${offsetX + 10}px`;
+        countryTooltipRef.current.style.top = `${offsetY + 10}px`;
       }
     }, 66);
-  }, [layerVisibility.countries, countryGeojson, updateCountryTooltip]);
+  }, [layerVisibility.countries, countryGeojson, updateCountryTooltip, unprojectCoords]);
 
   // Handle country click - center on country and update URL
   const handleCountryClick = useCallback((event: React.MouseEvent) => {
     if (!layerVisibility.countries || !countryGeojson) return;
     
-    const deck = deckRef.current?.deck;
-    if (!deck) return;
+    const coords = unprojectCoords(event.nativeEvent.offsetX, event.nativeEvent.offsetY);
+    if (!coords) return;
     
-    const viewport = deck.getViewports()[0];
-    if (!viewport) return;
+    const country = findCountryAtLocation(coords[0], coords[1], countryGeojson);
+    if (!country) return;
     
-    const [lng, lat] = viewport.unproject([event.nativeEvent.offsetX, event.nativeEvent.offsetY]);
-    const country = findCountryAtLocation(lng, lat, countryGeojson);
-    
-    if (country) {
-      const centroid = countryCentroids[country.code];
-      if (centroid) {
-        const [cLng, cLat] = centroid;
-        setViewState(prev => ({
-          ...prev,
-          longitude: cLng,
-          latitude: cLat,
-          zoom: COUNTRY_ZOOM,
-        }));
-        
-        updateUrlHash({
-          'CC': country.code,
-          'ML': formatMapLocation(cLng, cLat, COUNTRY_ZOOM)
-        });
-      }
+    const centroid = countryCentroids[country.code];
+    if (centroid) {
+      setViewState(prev => ({
+        ...prev,
+        longitude: centroid[0],
+        latitude: centroid[1],
+        zoom: COUNTRY_ZOOM,
+      }));
+      updateUrlHash({
+        'CC': country.code,
+        'ML': formatMapLocation(centroid[0], centroid[1], COUNTRY_ZOOM)
+      });
     }
-  }, [layerVisibility.countries, countryGeojson]);
+  }, [layerVisibility.countries, countryGeojson, unprojectCoords]);
 
   // Cleanup country tooltip when layer is disabled
   useEffect(() => {
