@@ -33,12 +33,6 @@ function getCountryCode(feature: any): string | null {
   return props?.iso_a2 || props?.ISO_A2 || props?.cc2 || null;
 }
 
-// Get country name from feature properties
-function getCountryName(feature: any): string {
-  const props = feature.properties;
-  return props?.name || props?.NAME || props?.admin || 'Unknown';
-}
-
 export function createCountryLayer({
   countryData,
   geojson,
