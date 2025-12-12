@@ -10,8 +10,6 @@ interface SettingsPanelProps {
   setOpacity: (val: number) => void;
   speed: number;
   setSpeed: (val: number) => void;
-  playbackSpeed: number;
-  setPlaybackSpeed: (val: number) => void;
 }
 
 export default function SettingsPanel({
@@ -26,8 +24,6 @@ export default function SettingsPanel({
   setOpacity,
   speed,
   setSpeed,
-  playbackSpeed,
-  setPlaybackSpeed
 }: SettingsPanelProps) {
   if (!show) return null;
 
@@ -142,7 +138,7 @@ export default function SettingsPanel({
       </div>
 
       {/* Speed Slider */}
-      <div className="mb-3">
+      <div>
         <div className="flex justify-between text-[10px] text-gray-400 mb-1">
           <span>Speed</span>
           <span>{(speed * 100).toFixed(0)}%</span>
@@ -157,27 +153,6 @@ export default function SettingsPanel({
           className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
         />
       </div>
-
-      {/* PLAYBACK Header */}
-      <h3 className="text-tor-green text-xs font-bold mb-3 mt-4 pt-3 border-t border-white/10 uppercase tracking-wider">Playback</h3>
-      
-      {/* Playback Speed Slider */}
-      <div className="mb-3">
-        <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-          <span>Speed</span>
-          <span>{playbackSpeed}x</span>
-        </div>
-        <input
-          type="range"
-          min="0.1"
-          max="4"
-          step="0.1"
-          value={playbackSpeed}
-          onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-          className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-tor-green"
-        />
-      </div>
     </div>
   );
 }
-
