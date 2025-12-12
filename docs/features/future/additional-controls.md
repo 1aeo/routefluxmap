@@ -1,13 +1,12 @@
-# Feature: Additional TorFlow Controls & UI Enhancements
+# Feature: Additional UI Controls & Enhancements
 
 **Status:** Proposed  
 **Priority:** Low-Medium  
-**Complexity:** Low-Medium  
-**Reference:** TorFlow `public/javascripts/main.js`, various UI components
+**Complexity:** Low-Medium
 
 ## Overview
 
-This document covers several smaller TorFlow features not yet implemented in RouteFluxMap. These are grouped together as they are relatively simple additions that enhance the user experience.
+This document covers several smaller features not yet implemented in RouteFluxMap. These are grouped together as they are relatively simple additions that enhance the user experience.
 
 ---
 
@@ -17,36 +16,20 @@ This document covers several smaller TorFlow features not yet implemented in Rou
 **Complexity:** Low
 
 ### Description
+
 Save the current map view (center coordinates and zoom level) in the URL hash so users can bookmark or share specific map views.
 
-### TorFlow Implementation
-```javascript
-// main.js
-var _buildMapLocQueryParam = function() {
-  var center = _map.getCenter();
-  return center.lng + ',' + center.lat + ',' + _map.getZoom();
-};
-
-var _updateMapLocUrl = function() {
-  var hash = window.location.hash;
-  var mapLocIndex = hash.indexOf('ML=');
-  // ... update hash with ?ML=lng,lat,zoom
-};
-
-_map.on('moveend', _updateMapLocUrl);
-_map.on('zoomend', _updateMapLocUrl);
-```
-
 ### URL Format
+
 ```
 https://your-site/#date=2024-12-01&ML=-40.5,30.2,4
 ```
 
-### RouteFluxMap Implementation
+Where `ML=longitude,latitude,zoom`
+
+### Implementation
 
 ```typescript
-// In TorMap.tsx
-
 // Parse map location from URL
 function parseMapLocation(): { lng: number; lat: number; zoom: number } | null {
   const hash = window.location.hash.slice(1);
@@ -60,16 +43,12 @@ function parseMapLocation(): { lng: number; lat: number; zoom: number } | null {
   return null;
 }
 
-// Update URL on map move
-const handleViewStateChange = useCallback(({ viewState }) => {
-  setViewState(viewState);
-  
-  // Update URL hash (debounced)
+// Update URL on map move (debounced)
+const handleViewStateChange = ({ viewState }) => {
   const { longitude, latitude, zoom } = viewState;
-  const hash = window.location.hash;
   const mlParam = `ML=${longitude.toFixed(2)},${latitude.toFixed(2)},${zoom.toFixed(1)}`;
-  // ... update hash
-}, []);
+  // Update URL hash
+};
 ```
 
 ---
@@ -80,29 +59,10 @@ const handleViewStateChange = useCallback(({ viewState }) => {
 **Complexity:** Low
 
 ### Description
-Control how many relay aggregation nodes are displayed (top N by bandwidth). TorFlow allows 100-2000 nodes.
 
-### TorFlow Implementation
-```javascript
-// main.js - _addMarkerControls
-var nodeCountSlider = new Slider({
-  label: 'Node Count (top n)',
-  min: layer.getNodeCountMin(),      // 100
-  max: layer.getNodeCountMax(),      // 2000
-  step: (max - min) / 100,
-  initialValue: layer.getNodeCount(), // 500
-  slideStop: function(event) {
-    if (event.value !== layer.getNodeCount()) {
-      layer.setNodeCount(event.value);
-      _updateNodes();
-    }
-  }
-});
-```
+Control how many relay aggregation nodes are displayed (top N by bandwidth). Range: 100-2000 nodes.
 
-### RouteFluxMap Implementation
-
-Currently, RouteFluxMap shows all aggregated nodes. To add this:
+### Implementation
 
 1. Add `nodeCount` state to TorMap
 2. Filter `relayData.nodes` by bandwidth (top N)
@@ -134,26 +94,12 @@ Currently, RouteFluxMap shows all aggregated nodes. To add this:
 **Complexity:** Low
 
 ### Description
+
 Control how many countries are shown in the choropleth layer (top N by client connections).
 
-### TorFlow Implementation
-```javascript
-// main.js - _addCountryControls
-var countryCountSlider = new Slider({
-  label: 'Country Count (top n)',
-  min: 5,
-  max: 200,
-  initialValue: 50,
-  slideStop: function(event) {
-    layer.setCountryCount(event.value);
-    _updateCountries();
-  }
-});
-```
+### Implementation
 
-### RouteFluxMap Implementation
-
-Filter countries by connection count before rendering choropleth.
+Filter countries by connection count before rendering choropleth. Default: 50 countries.
 
 ---
 
@@ -163,21 +109,10 @@ Filter countries by connection count before rendering choropleth.
 **Complexity:** Low
 
 ### Description
+
 Toggle whether node marker size scales with bandwidth or uses uniform size.
 
-### TorFlow Implementation
-```javascript
-var scaleByBandwidthToggle = new ToggleBox({
-  label: 'Scale by Bandwidth',
-  initialValue: true,
-  enabled: function() { layer.scaleByBandwidth(true); },
-  disabled: function() { layer.scaleByBandwidth(false); }
-});
-```
-
-### RouteFluxMap Implementation
-
-Currently always scales. Add toggle to disable:
+### Implementation
 
 ```tsx
 const [scaleNodesByBandwidth, setScaleNodesByBandwidth] = useState(true);
@@ -196,40 +131,21 @@ getRadius: scaleNodesByBandwidth
 **Complexity:** Low
 
 ### Description
-TorFlow offers multiple particle scaling options:
+
+Two additional particle controls:
 
 1. **Scale Size by Zoom** - Particles grow larger at higher zoom levels
 2. **Scale Count by Bandwidth** - Particle count varies with current date's bandwidth
 
-### TorFlow Implementation
-```javascript
-// Scale Size by Zoom
-var scaleByZoomToggle = new ToggleBox({
-  label: 'Scale Size by Zoom',
-  initialValue: false,
-  enabled: function() { layer.scaleSizeByZoom(true); },
-  disabled: function() { layer.scaleSizeByZoom(false); }
-});
+### Scale Count by Bandwidth
 
-// Scale Count by Bandwidth
-var scaleByBandwidthToggle = new ToggleBox({
-  label: 'Scale Count by Bandwidth',
-  initialValue: true,
-  enabled: function() { layer.scaleCountByBandwidth(true); },
-  disabled: function() { layer.scaleCountByBandwidth(false); }
-});
-```
+When enabled, particle count adjusts based on daily bandwidth:
 
-When scale by bandwidth is enabled:
-```javascript
-getParticleCount: function() {
-  var MIN_SCALE = 0.1;
-  if (this.scaleCountByBandwidth()) {
-    var scale = (this._currentBandwidth - this._minBandwidth) / 
-                (this._maxBandwidth - this._minBandwidth);
-    return this.getUnscaledParticleCount() * Math.max(scale, MIN_SCALE);
-  }
-  return this.getUnscaledParticleCount();
+```typescript
+function getParticleCount(baseCount, currentBandwidth, minBandwidth, maxBandwidth) {
+  const MIN_SCALE = 0.1;
+  const scale = (currentBandwidth - minBandwidth) / (maxBandwidth - minBandwidth);
+  return Math.floor(baseCount * Math.max(scale, MIN_SCALE));
 }
 ```
 
@@ -241,9 +157,11 @@ getParticleCount: function() {
 **Complexity:** Low
 
 ### Description
+
 Adjust the base particle size (default 1px, range 1-10px).
 
-### Implementation
+### Current State
+
 Already partially implemented in RouteFluxMap settings. Ensure full range is available.
 
 ---
@@ -254,25 +172,12 @@ Already partially implemented in RouteFluxMap settings. Ensure full range is ava
 **Complexity:** Low
 
 ### Description
+
 Adjust the brightness of the base map tiles.
 
-### TorFlow Implementation
-```javascript
-var brightnessSlider = new Slider({
-  label: 'Brightness',
-  min: 0.01,
-  max: 3,
-  step: 0.01,
-  initialValue: 1.0,
-  change: function(event) {
-    layer.setBrightness(event.value.newValue);
-  }
-});
-```
+### Implementation
 
-### RouteFluxMap Implementation
-
-MapLibre GL supports map brightness via layer paint properties or CSS filters:
+MapLibre GL supports brightness via CSS filters:
 
 ```tsx
 <Map
@@ -280,6 +185,8 @@ MapLibre GL supports map brightness via layer paint properties or CSS filters:
   style={{ filter: `brightness(${mapBrightness})` }}
 />
 ```
+
+Range: 0.1 to 3.0, default 1.0
 
 ---
 
@@ -289,19 +196,12 @@ MapLibre GL supports map brightness via layer paint properties or CSS filters:
 **Complexity:** Low
 
 ### Description
+
 Share button with links to Twitter, Facebook, LinkedIn, etc.
 
-### TorFlow Implementation
-```javascript
-$shareContainer.find('.share-content').jsSocials({
-  showCount: false,
-  shares: ['twitter', 'facebook', 'googleplus', 'linkedin', 'pinterest']
-});
-```
+### Implementation
 
-### RouteFluxMap Implementation
-
-Modern approach without jsSocials library:
+Modern approach without external libraries:
 
 ```tsx
 function ShareButton() {
@@ -343,26 +243,10 @@ function ShareButton() {
 **Complexity:** Low
 
 ### Description
+
 Color gradient legend showing what colors represent in the visualization.
 
-### TorFlow Implementation
-```javascript
-function _createRamp(increments, ramp) {
-  var $ramp = $('<div class="legend-ramp-container"></div>');
-  var colorRamp = d3.scale.linear()
-    .range(ramp)
-    .domain([0, 1]);
-  
-  for (var i = 0; i < increments; i++) {
-    $ramp.append('<div class="legend-increment" style="' +
-      'background-color:' + colorRamp(i/increments) + ';' +
-      'width:' + ((1/increments)*100) + '%;"></div>');
-  }
-  return $ramp;
-}
-```
-
-### RouteFluxMap Implementation
+### Implementation
 
 ```tsx
 interface LegendProps {
@@ -399,17 +283,14 @@ function Legend({ label, colorRamp, min, max }: LegendProps) {
 **Complexity:** Very Low
 
 ### Description
+
 Info button that shows project description and explanation.
 
 ### Current State
 
-RouteFluxMap has an About page (`/about`). TorFlow has both:
-- Info button → Summary modal (quick overview)
+RouteFluxMap has an About page (`/about`). Consider adding:
+- Info button → Summary modal (quick overview without leaving the map)
 - About button → About page (detailed changelog)
-
-### Implementation
-
-Add an info button that shows a condensed version of the about content in a modal, without leaving the map.
 
 ---
 
@@ -419,18 +300,10 @@ Add an info button that shows a condensed version of the about content in a moda
 **Complexity:** Low
 
 ### Description
+
 Allow users to drag modal dialogs (outlier chart, histogram, etc.) to reposition them.
 
-### TorFlow Implementation
-Uses Draggabilly library:
-```javascript
-if (!IS_MOBILE) {
-  $outlierContainer.draggabilly();
-  $histogramContainer.draggabilly();
-}
-```
-
-### RouteFluxMap Implementation
+### Implementation
 
 Use a React drag library like `react-draggable`:
 
@@ -490,4 +363,3 @@ function DraggableModal({ children, ...props }) {
 - `src/components/ui/InfoModal.tsx` - Summary modal
 - `src/components/map/TorMap.tsx` - Add URL persistence, sliders
 - `src/lib/utils/url.ts` - URL parsing/building utilities
-

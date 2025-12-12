@@ -2,12 +2,11 @@
 
 **Status:** Proposed  
 **Priority:** Medium  
-**Complexity:** Medium  
-**Reference:** TorFlow `public/javascripts/ui/outlierchart.js`
+**Complexity:** Medium
 
 ## Overview
 
-The OutlierChart component shows **anomalous days** for a selected country - days where client connections significantly deviated from the norm. This is one of TorFlow's most powerful analytical features, enabling users to identify significant events in Tor usage patterns.
+The OutlierChart component shows **anomalous days** for a selected country - days where client connections significantly deviated from the norm. This enables users to identify significant events in Tor usage patterns.
 
 ## Use Cases
 
@@ -19,11 +18,10 @@ This feature helps identify:
 - **Potential attacks** - Unusual traffic patterns
 - **Seasonal patterns** - Holidays, events affecting usage
 
-## TorFlow Reference Implementation
+## Visual Design
 
-TorFlow's outlier chart includes these key behaviors:
+### Chart Characteristics
 
-### Visual Design (from TorFlow)
 - **Vertical bar chart** with bars representing outlier days
 - **Color gradient**: Blue (positive/high) → Gray (average) → Red (negative/low)
 - **Y-axis**: Uses `sqrt` scale for better distribution of large values
@@ -31,23 +29,11 @@ TorFlow's outlier chart includes these key behaviors:
 - **Average line**: Shows the mean as a reference bar in the center
 - **Active date highlighting**: Current date bar has special styling
 
-### Data Processing (from TorFlow)
-```javascript
-// TorFlow outlier calculation (db/country.js)
-// 1. Get all data points for country, sorted by count DESC
-// 2. Bound outlier count (max 50)
-// 3. Ensure equal numbers on either side of average
-// 4. Calculate average from all data
-// 5. Extract top N (highest count days)
-// 6. Extract bottom N (lowest count days)
-// 7. Return: topN + [average] + bottomN
-```
-
 ### Interaction Features
+
 - **Hover tooltips**: Show date and exact count
 - **Click to navigate**: Clicking a bar navigates the main date slider
 - **URL deep linking**: Country selection persists in URL hash (`?C=us,USA`)
-- **Drag threshold**: Prevents accidental clicks during drag (10px threshold)
 
 ## User Flow
 
@@ -66,6 +52,7 @@ TorFlow's outlier chart includes these key behaviors:
 ### Input
 
 Historical country client data for the selected country:
+
 ```typescript
 interface CountryTimeline {
   date: string;
@@ -94,9 +81,10 @@ interface CountryOutlier {
 }
 ```
 
-### Outlier Detection (TorFlow Method)
+### Outlier Detection Algorithm
 
-TorFlow uses a simpler ranking method:
+**Ranking-based approach (simpler):**
+
 1. Sort all data by count (descending)
 2. Take top N as "high outliers" (position: N, N-1, ..., 1)
 3. Calculate average (position: 0)
@@ -105,17 +93,18 @@ TorFlow uses a simpler ranking method:
 
 Default N = 10 (5 on mobile).
 
-### Alternative: Standard Deviation Method
+**Alternative: Standard Deviation Method**
 
 For more statistically rigorous detection:
+
 1. Calculate mean and stdDev of historical data
 2. Flag any day where `|count - mean| / stdDev > 1.5`
 3. Rank by absolute deviation
 4. Return top 20
 
-## Visual Design
+## Visual Layout
 
-### TorFlow-style Outlier Bar Chart
+### Outlier Bar Chart
 
 ```
 Guard Client Connection Outliers by Date (USA)
@@ -168,8 +157,6 @@ Connections
 ## Component Structure
 
 ```tsx
-// src/components/ui/OutlierChart.tsx
-
 interface OutlierChartProps {
   countryCode: string;     // 2-letter code
   countryCode3: string;    // 3-letter code
@@ -179,72 +166,20 @@ interface OutlierChartProps {
   onDateSelect: (date: string) => void;
 }
 
-export default function OutlierChart({ 
-  countryCode, 
-  countryCode3,
-  countryName, 
-  currentDate,
-  onClose,
-  onDateSelect 
-}: OutlierChartProps) {
-  const [stats, setStats] = useState<CountryStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const OUTLIER_COUNT = isMobile() ? 5 : 10;
-  
-  useEffect(() => {
-    fetchCountryHistory(countryCode)
-      .then(timeline => {
-        const stats = calculateOutlierStats(timeline, OUTLIER_COUNT);
-        setStats(stats);
-        setLoading(false);
-      });
-  }, [countryCode]);
-  
-  // Update URL hash for deep linking
-  useEffect(() => {
-    updateUrlWithCountry(countryCode, countryCode3);
-  }, [countryCode, countryCode3]);
-  
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-tor-darker border border-tor-green/30 rounded-lg p-6 max-w-2xl w-full mx-4">
-        {/* Header */}
-        <header className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-tor-green">
-            Guard Client Connection Outliers ({countryCode3.toUpperCase()})
-          </h2>
-          <button onClick={onClose}>✕</button>
-        </header>
-        
-        {loading ? <LoadingSpinner /> : stats ? (
-          <>
-            <StatCards stats={stats} />
-            <OutlierBarChart 
-              outliers={stats.outliers}
-              activeDate={currentDate}
-              onBarClick={onDateSelect}
-            />
-          </>
-        ) : <NoDataMessage />}
-      </div>
-    </div>
-  );
+export default function OutlierChart(props: OutlierChartProps) {
+  // 1. Fetch country history
+  // 2. Calculate outlier stats
+  // 3. Update URL hash for deep linking
+  // 4. Render modal with stats and chart
 }
 ```
 
-### OutlierBarChart Sub-component
+### Bar Color Function
 
-```tsx
-// Key visual properties from TorFlow:
-interface OutlierBarChartProps {
-  outliers: CountryOutlier[];
-  activeDate: string;
-  onBarClick: (date: string) => void;
-}
-
-// Color interpolation
-const getBarColor = (position: number, maxPosition: number) => {
+```typescript
+function getBarColor(position: number, maxPosition: number): string {
   if (position === 0) return 'gray';  // Average
+  
   const normalized = position / maxPosition;
   if (position > 0) {
     // Blue gradient for high values
@@ -253,9 +188,14 @@ const getBarColor = (position: number, maxPosition: number) => {
     // Red gradient for low values
     return interpolate('#808080', '#ff0000', Math.sqrt(Math.abs(normalized)));
   }
-};
+}
+```
 
-// Y-axis uses sqrt scale like TorFlow
+### Y-Scale
+
+Use sqrt scale for better value distribution:
+
+```typescript
 const yScale = d3.scaleSqrt()
   .domain([0, maxCount])
   .range([height, 0]);
@@ -266,6 +206,7 @@ const yScale = d3.scaleSqrt()
 ### Option A: Pre-computed (Recommended)
 
 Generate `country-history/{CC}.json` files during data fetch:
+
 ```json
 {
   "countryCode": "US",
@@ -290,37 +231,30 @@ Read all `countries-YYYY-MM-DD.json` files and extract the specific country.
 
 ## URL Deep Linking
 
-TorFlow maintains country selection in URL:
+Country selection persists in URL for bookmarking:
+
 ```
 https://example.com/#/2024-12-01?C=us,USA
 ```
 
-Implementation:
-```typescript
-function updateUrlWithCountry(cc2: string, cc3: string) {
-  const hash = window.location.hash;
-  const countryParam = `C=${cc2},${cc3}`;
-  
-  if (hash.includes('?')) {
-    // Append or replace country param
-    if (hash.includes('C=')) {
-      window.location.hash = hash.replace(/C=[^&]+/, countryParam);
-    } else {
-      window.location.hash = hash + '&' + countryParam;
-    }
-  } else {
-    window.location.hash = hash + '?' + countryParam;
-  }
-}
+**Pseudocode:**
 
-function getCountryFromUrl(): { cc2: string; cc3: string } | null {
-  const hash = window.location.hash;
-  const match = hash.match(/C=([^,&]+),([^&]+)/);
-  if (match) {
-    return { cc2: match[1], cc3: match[2] };
-  }
-  return null;
-}
+```
+function updateUrlWithCountry(cc2, cc3):
+    hash = window.location.hash
+    countryParam = "C=" + cc2 + "," + cc3
+    
+    if hash contains "?":
+        if hash contains "C=":
+            replace existing C param
+        else:
+            append "&" + countryParam
+    else:
+        append "?" + countryParam
+
+function getCountryFromUrl():
+    match = hash.match(/C=([^,&]+),([^&]+)/)
+    return match ? { cc2: match[1], cc3: match[2] } : null
 ```
 
 ## Implementation Steps
@@ -332,7 +266,7 @@ function getCountryFromUrl(): { cc2: string; cc3: string } | null {
 5. [ ] Integrate with CountryLayer click handler in TorMap
 6. [ ] Add URL hash update/parse for country deep linking
 7. [ ] Add country history data to fetch pipeline (`fetch-country-history.ts`)
-8. [ ] Style with TorFlow color scheme (blue/gray/red gradient)
+8. [ ] Style with color scheme (blue/gray/red gradient)
 9. [ ] Add date navigation callback
 
 ## Dependencies
@@ -357,3 +291,6 @@ function getCountryFromUrl(): { cc2: string; cc3: string } | null {
 - Trend analysis / prediction
 - Mobile-optimized layout (fewer outliers, touch-friendly bars)
 
+## Reference
+
+Inspired by [TorFlow](https://github.com/unchartedsoftware/torflow)'s outlier chart for anomaly detection.

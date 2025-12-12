@@ -1,6 +1,6 @@
 # Feature Implementation Priority Guide
 
-This document provides a recommended order for implementing remaining TorFlow features in RouteFluxMap, based on **impact vs effort** analysis.
+This document provides a recommended order for implementing remaining RouteFluxMap features, based on **impact vs effort** analysis.
 
 ---
 
@@ -14,10 +14,9 @@ This document provides a recommended order for implementing remaining TorFlow fe
 | 4 | Legend Component | Medium | Low | [Additional Controls](./additional-controls.md#9-legend-component) |
 | 5 | Social Sharing | Medium | Low | [Additional Controls](./additional-controls.md#8-social-sharing) |
 | 6 | Bezier Path Curves | Medium | High | [Bezier Path Offset](./bezier-path-offset.md) |
-| 7 | Web Worker | Low | Medium | [Particle Web Worker](./particle-web-worker.md) |
-| 8 | Node/Country Sliders | Low | Low | [Additional Controls](./additional-controls.md#2-node-count-slider) |
-| 9 | Scaling Toggles | Low | Low | [Additional Controls](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes) |
-| 10 | Other Controls | Very Low | Low | [Additional Controls](./additional-controls.md) |
+| 7 | Node/Country Sliders | Low | Low | [Additional Controls](./additional-controls.md#2-node-count-slider) |
+| 8 | Scaling Toggles | Low | Low | [Additional Controls](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes) |
+| 9 | Other Controls | Very Low | Low | [Additional Controls](./additional-controls.md) |
 
 ---
 
@@ -43,10 +42,9 @@ This document provides a recommended order for implementing remaining TorFlow fe
 **Document:** [Country Outlier Chart](./country-outlier.md)
 
 **Why #2:**
-- **Highest analytical value** - TorFlow's killer feature for researchers
+- **Highest analytical value** - Key feature for researchers
 - **Data pipeline ready** - `calculateOutliers()` already exists in fetch scripts
 - **Enables anomaly detection** - Identify censorship events, usage spikes
-- **Clear TorFlow reference** - Well-documented existing implementation
 - **Completes country click** - Currently just logs to console
 
 **Implementation time:** ~4-6 hours
@@ -113,7 +111,7 @@ This document provides a recommended order for implementing remaining TorFlow fe
 
 **Why #6:**
 - **Visual polish** - Makes particle paths look like flight routes
-- **TorFlow signature look** - The curved arcs are distinctive
+- **Distinctive look** - Curved arcs are visually appealing
 - **Higher complexity** - Requires shader work or CPU bezier math
 - **Not blocking anything** - Straight lines work fine
 
@@ -123,30 +121,11 @@ This document provides a recommended order for implementing remaining TorFlow fe
 
 ---
 
-### Priority 7: Web Worker for Particles
-
-**Document:** [Particle Web Worker](./particle-web-worker.md)
-
-**Why #7:**
-- **Performance optimization** - Prevents UI freeze during init
-- **Current system works** - Only noticeable with 400K+ particles
-- **Medium complexity** - Worker communication, ArrayBuffer transfer
-- **Nice to have** - Not blocking any user workflows
-
-**Implementation time:** ~3-4 hours
-
-**When to prioritize higher:**
-- If users complain about initial load stutter
-- If targeting lower-end devices
-- If increasing default particle count
-
----
-
-### Priority 8: Node/Country Count Sliders
+### Priority 7: Node/Country Count Sliders
 
 **Document:** [Additional Controls → Node Count](./additional-controls.md#2-node-count-slider), [Country Count](./additional-controls.md#3-country-count-slider)
 
-**Why #8:**
+**Why #7:**
 - **Power user feature** - Most users won't adjust
 - **Low effort** - Simple slider + filter
 - **Performance tuning** - Useful for slow devices
@@ -156,11 +135,11 @@ This document provides a recommended order for implementing remaining TorFlow fe
 
 ---
 
-### Priority 9: Scaling Toggles
+### Priority 8: Scaling Toggles
 
 **Document:** [Additional Controls → Scaling Options](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes)
 
-**Why #9:**
+**Why #8:**
 - **Niche use cases** - Most users prefer default scaling
 - **Low effort** - Just toggles
 - **Current behavior is good** - Scaling enabled by default
@@ -174,12 +153,12 @@ Includes:
 
 ---
 
-### Priority 10: Other Controls
+### Priority 9: Other Controls
 
 **Document:** [Additional Controls](./additional-controls.md)
 
-**Why #10:**
-- **Very niche features** - Rarely used in TorFlow
+**Why #9:**
+- **Very niche features** - Rarely needed
 - **Polish items** - Nice to have, not essential
 
 Includes:
@@ -206,7 +185,6 @@ If you have limited time, these deliver the most value quickly:
 
 1. 🔧 **Country Outlier Chart** - 4-6 hours, highest analytical value
 2. 🔧 **Country Date Histogram** - 3-4 hours, completes country analytics
-3. 🔧 **Web Worker** - 3-4 hours, performance boost
 
 ---
 
@@ -230,12 +208,7 @@ If you have limited time, these deliver the most value quickly:
 
 ### Sprint 3: Polish (1-2 days)
 - [ ] Bezier Path Curves
-- [ ] Web Worker (if needed)
-
-### Sprint 4: Power User (1 day)
-- [ ] Node/Country count sliders
-- [ ] Scaling toggles
-- [ ] Remaining controls
+- [ ] Any remaining controls
 
 ---
 
@@ -251,22 +224,21 @@ Country Outlier Chart (#2)
     └── Country Date Histogram (#3) [shares modal]
 
 Bezier Paths (#6)
-    └── Web Worker (#7) [if generating curve params]
+    └── (No dependencies)
 ```
 
 ---
 
 ## What NOT to Implement
 
-These TorFlow features were intentionally excluded:
+These features were intentionally excluded:
 
 | Feature | Reason |
 |---------|--------|
 | Traffic Type Toggle | User requested skip |
 | MySQL Backend | Static site architecture |
 | Docker Deployment | Cloudflare Pages hosting |
-| Bower/Gulp Build | Modern npm/Vite tooling |
-| jsSocials Library | Native share URLs instead |
+| Legacy Build Tools | Modern npm/Vite tooling |
 
 ---
 
@@ -275,6 +247,7 @@ These TorFlow features were intentionally excluded:
 **Already Implemented:**
 - Core map visualization ✅
 - Particle animation ✅
+- Web Worker particle generation ✅
 - Traffic path lines ✅
 - Real country data ✅
 - Date slider/histogram ✅
@@ -284,6 +257,7 @@ These TorFlow features were intentionally excluded:
 - Layer controls ✅
 - About page ✅
 - Automated data pipeline ✅
+- Loading bar ✅
 
 **Remaining (by priority):**
 1. Map URL (trivial)
@@ -292,6 +266,4 @@ These TorFlow features were intentionally excluded:
 4. Legend (easy)
 5. Sharing (easy)
 6. Bezier Paths (complex)
-7. Web Worker (medium)
-8-10. Various controls (easy)
-
+7-9. Various controls (easy)
