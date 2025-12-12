@@ -174,9 +174,21 @@ export default function DateSliderChart({
   const [containerWidth, setContainerWidth] = useState(MAX_SLIDER_WIDTH);
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const sliderTrackRef = useRef<HTMLDivElement>(null);
+  
+  // Use refs for dragging state to avoid re-renders and recalculations during drag
+  const isDraggingRef = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const cachedRectRef = useRef<DOMRect | null>(null);
+  const lastBucketIndexRef = useRef<number>(-1);
   
   const { dates, bandwidths } = dateIndex;
-  const currentIndex = dates.indexOf(currentDate);
+  const dateToIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < dates.length; i++) m.set(dates[i], i);
+    return m;
+  }, [dates]);
+  const currentIndex = dateToIndex.get(currentDate) ?? -1;
   
   // Measure container width
   useEffect(() => {
@@ -231,67 +243,147 @@ export default function DateSliderChart({
   // Bar width is now handled by flexbox - each bar grows to fill space evenly
   // This eliminates rounding errors from Math.floor
   
-  // Chart data with colors and heights
-  const chartData = useMemo(() => {
+  // Precompute static bar geometry/colors once per aggregated dataset (NOT per currentDate change)
+  const staticBars = useMemo(() => {
     if (!aggregatedData.length) return [];
-    
+
     const bwValues = aggregatedData.map(d => d.bandwidth);
-    const minBw = Math.min(...bwValues.filter(b => b > 0));
-    const maxBw = Math.max(...bwValues);
+    const positive = bwValues.filter(b => b > 0);
+    const minBw = positive.length ? Math.min(...positive) : 0;
+    const maxBw = bwValues.length ? Math.max(...bwValues) : 0;
     const range = maxBw - minBw || 1;
-    
+
     return aggregatedData.map((item) => {
       const normalized = (item.bandwidth - minBw) / range;
       const heightPercent = Math.max(15, normalized * 100);
-      const isActive = item.dates.includes(currentDate);
-      
       return {
         ...item,
         normalized,
         heightPercent,
         color: interpolateColor('#004d29', '#00ff88', Math.sqrt(normalized)),
-        isActive,
       };
     });
-  }, [aggregatedData, currentDate]);
-  
-  // Calculate slider progress percentage (combines bucket finding + progress calc)
-  const sliderProgress = useMemo(() => {
-    if (chartData.length === 0) return 0;
-    const activeIndex = chartData.findIndex(d => d.isActive);
-    return ((activeIndex + 0.5) / chartData.length) * 100;
-  }, [chartData]);
-  
-  // Handle bar click
-  const handleBarClick = useCallback((item: AggregatedData) => {
-    if (item.dates.includes(currentDate) && item.dates.length > 1) {
-      const currentPosInBucket = item.dates.indexOf(currentDate);
-      const nextPos = (currentPosInBucket + 1) % item.dates.length;
-      const nextDate = item.dates[nextPos];
-      onDateChange(nextDate);
-      window.location.hash = `date=${nextDate}`;
-    } else {
-      const targetDate = item.dates[0];
-      onDateChange(targetDate);
-      window.location.hash = `date=${targetDate}`;
+  }, [aggregatedData]);
+
+  // Map every underlying date -> bucket index (built only when aggregatedData changes)
+  const dateToBucketIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < aggregatedData.length; i++) {
+      for (const d of aggregatedData[i].dates) m.set(d, i);
     }
-  }, [currentDate, onDateChange]);
+    return m;
+  }, [aggregatedData]);
+
+  const activeBucketIndex = dateToBucketIndex.get(currentDate) ?? -1;
+
+  // Calculate slider progress percentage (O(1) per currentDate change)
+  const sliderProgress = useMemo(() => {
+    const count = staticBars.length;
+    if (count === 0) return 0;
+    const clampedIndex = Math.max(0, Math.min(count - 1, activeBucketIndex));
+    return ((clampedIndex + 0.5) / count) * 100;
+  }, [activeBucketIndex, staticBars.length]);
+  
+  const navigateToDate = useCallback((date: string) => {
+    onDateChange(date);
+    window.location.hash = `date=${date}`;
+  }, [onDateChange]);
+
+  // Handle bar click
+  const handleBarClick = useCallback((bucketIndex: number) => {
+    const item = aggregatedData[bucketIndex];
+    if (!item) return;
+
+    // If clicking on active bucket and it has multiple dates, cycle through them
+    if (bucketIndex === activeBucketIndex && item.dates.length > 1) {
+      const currentPosInBucket = item.dates.indexOf(currentDate);
+      const safePos = currentPosInBucket >= 0 ? currentPosInBucket : 0;
+      const nextPos = (safePos + 1) % item.dates.length;
+      navigateToDate(item.dates[nextPos]);
+      return;
+    }
+
+    // Otherwise, jump to the first date in the bucket
+    navigateToDate(item.dates[0]);
+  }, [activeBucketIndex, aggregatedData, currentDate, navigateToDate]);
+  
+  // Store aggregatedData in ref for use in event handlers without causing re-renders
+  const aggregatedDataRef = useRef(aggregatedData);
+  aggregatedDataRef.current = aggregatedData;
+  
+  // Store navigateToDate in ref to avoid callback recreation
+  const navigateToDateRef = useRef(navigateToDate);
+  navigateToDateRef.current = navigateToDate;
+  
+  // Handle slider interaction - compute bucket index from mouse position
+  // Uses cached rect and deduplicates same-bucket navigation
+  const handleSliderInteraction = useCallback((clientX: number) => {
+    const rect = cachedRectRef.current;
+    const data = aggregatedDataRef.current;
+    if (!rect || data.length === 0) return;
+    
+    const relativeX = clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, relativeX / rect.width));
+    const bucketIndex = Math.min(
+      data.length - 1,
+      Math.floor(ratio * data.length)
+    );
+    
+    // Skip if same bucket (avoid redundant navigation during drag)
+    if (bucketIndex === lastBucketIndexRef.current) return;
+    lastBucketIndexRef.current = bucketIndex;
+    
+    const item = data[bucketIndex];
+    if (item?.dates[0]) {
+      navigateToDateRef.current(item.dates[0]);
+    }
+  }, []); // No dependencies - uses refs
+  
+  // Mouse down on slider track - cache rect and attach listeners
+  const handleSliderMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const track = sliderTrackRef.current;
+    if (!track) return;
+    
+    // Cache bounding rect once at drag start (avoids reflow during drag)
+    cachedRectRef.current = track.getBoundingClientRect();
+    lastBucketIndexRef.current = -1; // Reset to allow first click
+    isDraggingRef.current = true;
+    setIsDragging(true);
+    
+    // Attach listeners only when dragging
+    const handleMouseMove = (ev: MouseEvent) => {
+      handleSliderInteraction(ev.clientX);
+    };
+    
+    const handleMouseUp = () => {
+      isDraggingRef.current = false;
+      cachedRectRef.current = null;
+      setIsDragging(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    
+    // Handle initial click position
+    handleSliderInteraction(e.clientX);
+  }, [handleSliderInteraction]);
   
   // Navigate to previous date
   const goToPrevious = useCallback(() => {
     if (currentIndex > 0) {
-      onDateChange(dates[currentIndex - 1]);
-      window.location.hash = `date=${dates[currentIndex - 1]}`;
+      navigateToDate(dates[currentIndex - 1]);
     }
-  }, [currentIndex, dates, onDateChange]);
+  }, [currentIndex, dates, navigateToDate]);
   
   // Navigate to next date
   const goToNext = useCallback(() => {
-    if (currentIndex < dates.length - 1) {
-      onDateChange(dates[currentIndex + 1]);
-      window.location.hash = `date=${dates[currentIndex + 1]}`;
+    if (currentIndex >= 0 && currentIndex < dates.length - 1) {
+      navigateToDate(dates[currentIndex + 1]);
     }
-  }, [currentIndex, dates, onDateChange]);
+  }, [currentIndex, dates, navigateToDate]);
   
   // Play/pause animation
   const togglePlay = useCallback(() => {
@@ -302,12 +394,10 @@ export default function DateSliderChart({
   useEffect(() => {
     if (isPlaying) {
       playIntervalRef.current = setInterval(() => {
-        if (currentIndex < dates.length - 1) {
-          onDateChange(dates[currentIndex + 1]);
-          window.location.hash = `date=${dates[currentIndex + 1]}`;
+        if (currentIndex >= 0 && currentIndex < dates.length - 1) {
+          navigateToDate(dates[currentIndex + 1]);
         } else {
-          onDateChange(dates[0]);
-          window.location.hash = `date=${dates[0]}`;
+          navigateToDate(dates[0]);
         }
       }, playSpeed);
     } else {
@@ -322,7 +412,7 @@ export default function DateSliderChart({
         clearInterval(playIntervalRef.current);
       }
     };
-  }, [isPlaying, currentIndex, dates, onDateChange, playSpeed]);
+  }, [isPlaying, currentIndex, dates, navigateToDate, playSpeed]);
   
   // Keyboard navigation
   useEffect(() => {
@@ -341,9 +431,9 @@ export default function DateSliderChart({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [goToPrevious, goToNext, togglePlay]);
   
-  if (chartData.length <= 1) return null;
+  if (staticBars.length <= 1) return null;
   
-  const currentBandwidth = bandwidths[currentIndex] || 0;
+  const currentBandwidth = (currentIndex >= 0 ? bandwidths[currentIndex] : 0) || 0;
   
   // Generate year labels for display (show every few years to avoid crowding)
   const yearLabels = useMemo(() => {
@@ -365,35 +455,40 @@ export default function DateSliderChart({
         width: containerWidth,
         maxWidth: '100%',
         padding: `14px ${HORIZONTAL_PADDING}px 12px`,
+        // Single source of truth for alignment:
+        // histogram, slider track, and labels all use var(--content-width)
+        ['--content-width' as any]: `${contentWidth}px`,
       }}
     >
       {/* HISTOGRAM SECTION - Full width */}
-      <div style={{ width: contentWidth }}>
+      <div style={{ width: 'var(--content-width)' }}>
         {/* Bars */}
         <div 
           className="flex items-end"
           style={{ 
             height: HISTOGRAM_HEIGHT,
             gap: `${BAR_GAP}px`,
-            width: contentWidth,
+            width: 'var(--content-width)',
           }}
         >
-          {chartData.map((bar) => (
+          {staticBars.map((bar, i) => {
+            const isActive = i === activeBucketIndex;
+            return (
             <div
               key={bar.key}
               className={`
                 relative cursor-pointer transition-all duration-100 group flex-1
                 hover:opacity-100
-                ${bar.isActive ? 'opacity-100' : 'opacity-60 hover:opacity-90'}
+                ${isActive ? 'opacity-100' : 'opacity-60 hover:opacity-90'}
               `}
               style={{
                 height: `${bar.heightPercent}%`,
                 minHeight: '3px',
-                backgroundColor: bar.isActive ? '#00ff88' : bar.color,
+                backgroundColor: isActive ? '#00ff88' : bar.color,
                 borderRadius: '2px 2px 0 0',
-                boxShadow: bar.isActive ? '0 0 8px #00ff88' : 'none',
+                boxShadow: isActive ? '0 0 8px #00ff88' : 'none',
               }}
-              onClick={() => handleBarClick(bar)}
+              onClick={() => handleBarClick(i)}
               title={`${bar.label} - ${formatBandwidth(bar.bandwidth)}`}
             >
               {/* Hover tooltip */}
@@ -417,22 +512,31 @@ export default function DateSliderChart({
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
         
-        {/* Slider track - same width as histogram */}
+        {/* Slider track - same width as histogram, now interactive */}
         <div 
-          className="relative h-1.5 bg-white/10 rounded-full mt-2"
-          style={{ width: contentWidth }}
+          ref={sliderTrackRef}
+          className={`relative h-2 bg-white/10 rounded-full mt-2 cursor-pointer select-none ${
+            isDragging ? 'cursor-grabbing' : 'hover:bg-white/15'
+          }`}
+          style={{ width: 'var(--content-width)' }}
+          onMouseDown={handleSliderMouseDown}
         >
           {/* Progress fill */}
           <div 
-            className="absolute h-full bg-tor-green/30 rounded-full transition-all duration-150"
+            className={`absolute h-full bg-tor-green/30 rounded-full pointer-events-none ${
+              isDragging ? '' : 'transition-all duration-150'
+            }`}
             style={{ width: `${sliderProgress}%` }}
           />
           {/* Thumb */}
           <div 
-            className="absolute w-3 h-3 bg-tor-green rounded-full -top-[3px] -ml-1.5 shadow-lg shadow-tor-green/30 transition-all duration-150"
+            className={`absolute w-3.5 h-3.5 bg-tor-green rounded-full -top-[3px] -ml-[7px] shadow-lg shadow-tor-green/40 pointer-events-none ${
+              isDragging ? 'scale-110' : 'transition-all duration-150 hover:scale-110'
+            }`}
             style={{ left: `${sliderProgress}%` }}
           />
         </div>
@@ -441,7 +545,7 @@ export default function DateSliderChart({
         {mode === 'years' && yearLabels.length > 0 && (
           <div 
             className="flex justify-between mt-1.5 text-[10px] text-gray-500"
-            style={{ width: contentWidth }}
+            style={{ width: 'var(--content-width)' }}
           >
             {yearLabels.map(({ key, label }) => (
               <span key={key}>{label}</span>
@@ -453,7 +557,7 @@ export default function DateSliderChart({
         {mode !== 'years' && (
           <div 
             className="flex justify-between mt-1.5 text-[10px] text-gray-500"
-            style={{ width: contentWidth }}
+            style={{ width: 'var(--content-width)' }}
           >
             <span>
               {mode === 'days' 
@@ -500,7 +604,7 @@ export default function DateSliderChart({
         {/* Previous button */}
         <button
           onClick={goToPrevious}
-          disabled={currentIndex === 0}
+          disabled={currentIndex <= 0}
           className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           aria-label="Previous date"
         >
@@ -517,7 +621,7 @@ export default function DateSliderChart({
         {/* Next button */}
         <button
           onClick={goToNext}
-          disabled={currentIndex === dates.length - 1}
+          disabled={currentIndex < 0 || currentIndex >= dates.length - 1}
           className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           aria-label="Next date"
         >
