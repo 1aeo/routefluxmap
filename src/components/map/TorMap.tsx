@@ -667,6 +667,15 @@ export default function TorMap() {
     };
   }, [relayData]);
 
+  // Memoize relay stats for timeline display (avoids reduce on every render)
+  const relayStats = useMemo(() => {
+    if (!relayData?.nodes) return null;
+    return {
+      relayCount: relayData.nodes.reduce((sum, n) => sum + n.relays.length, 0),
+      locationCount: relayData.nodes.length,
+    };
+  }, [relayData]);
+
   // Memoize zoom-based calculations (only recompute when zoom changes)
   const { zoomScale, baseMinPixels, baseMaxPixels } = useMemo(() => ({
     zoomScale: calculateZoomScale(viewState.zoom),
@@ -983,12 +992,15 @@ export default function TorMap() {
       <div className="absolute bottom-4 left-0 right-0 z-10 flex justify-center pointer-events-none">
         <div className="pointer-events-auto">
           {/* Combined date slider with histogram - only show when multiple dates */}
-          {dateIndex && currentDate && dateIndex.dates.length > 1 && (
+          {dateIndex && currentDate && dateIndex.dates.length > 1 && relayStats && (
             <DateSliderChart
               dateIndex={dateIndex}
               currentDate={currentDate}
               onDateChange={handleDateChange}
               playbackSpeed={playbackSpeed}
+              onPlaybackSpeedChange={setPlaybackSpeed}
+              relayCount={relayStats.relayCount}
+              locationCount={relayStats.locationCount}
             />
           )}
 
@@ -1039,8 +1051,6 @@ export default function TorMap() {
           setOpacity={setLineOpacityFactor}
           speed={lineSpeedFactor}
           setSpeed={setLineSpeedFactor}
-          playbackSpeed={playbackSpeed}
-          setPlaybackSpeed={setPlaybackSpeed}
         />
 
         <button

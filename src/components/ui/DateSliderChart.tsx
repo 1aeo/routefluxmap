@@ -1,10 +1,11 @@
 /**
- * DateSliderChart - Combined bandwidth histogram + date slider
+ * DateSliderChart - Timeline control center with bandwidth histogram
  * 
  * Features:
- * - Always centered in the display
- * - Max width to avoid crowding side content
- * - Adaptive bar widths based on available space
+ * - Full-width histogram bars
+ * - Slider track aligned with histogram
+ * - Stats row: relay count, bandwidth, location count
+ * - Controls: prev/next, date display, play/pause, speed selector
  * - Auto-aggregation: days → months → years based on data volume
  */
 
@@ -16,32 +17,36 @@ interface DateSliderChartProps {
   dateIndex: DateIndex;
   currentDate: string;
   onDateChange: (date: string) => void;
-  playbackSpeed?: number; // 0.1 to 4.0, default 1.0 (1x speed)
+  playbackSpeed: number;
+  onPlaybackSpeedChange: (speed: number) => void;
+  relayCount: number;
+  locationCount: number;
 }
 
 // Aggregation mode
 type AggregationMode = 'days' | 'months' | 'years';
 
 interface AggregatedData {
-  key: string;           // The aggregation key (date, month, or year)
-  label: string;         // Display label
-  bandwidth: number;     // Sum or average bandwidth
-  dates: string[];       // Original dates in this bucket
-  startDate: string;     // First date in bucket
-  endDate: string;       // Last date in bucket
+  key: string;
+  label: string;
+  bandwidth: number;
+  dates: string[];
+  startDate: string;
+  endDate: string;
 }
 
-// Constants for layout
-const MAX_SLIDER_WIDTH = 700;  // Maximum width in pixels
-const MIN_BAR_WIDTH = 2;       // Minimum bar width
-const MAX_BAR_WIDTH = 14;      // Maximum bar width  
-const IDEAL_BAR_WIDTH = 6;     // Ideal bar width
-const BAR_GAP = 2;             // Gap between bars
-const CONTROLS_WIDTH = 100;    // Width for prev/play/next buttons
+// Layout constants
+const MAX_SLIDER_WIDTH = 650;
+const BAR_GAP = 2;
+const HISTOGRAM_HEIGHT = 70;
+const HORIZONTAL_PADDING = 16; // px-4 = 16px each side
 
 // Thresholds for aggregation
-const MAX_DAYS_DISPLAY = 120;  // Switch to months above this
-const MAX_MONTHS_DISPLAY = 36; // Switch to years above this
+const MAX_DAYS_DISPLAY = 120;
+const MAX_MONTHS_DISPLAY = 36;
+
+// Speed options
+const SPEED_OPTIONS = [1, 2, 4] as const;
 
 // Format bandwidth for display
 function formatBandwidth(gbits: number): string {
@@ -51,15 +56,14 @@ function formatBandwidth(gbits: number): string {
   return `${gbits.toFixed(0)} Gbps`;
 }
 
-
 // Get month key from date string
 function getMonthKey(dateStr: string): string {
-  return dateStr.slice(0, 7); // YYYY-MM
+  return dateStr.slice(0, 7);
 }
 
 // Get year key from date string
 function getYearKey(dateStr: string): string {
-  return dateStr.slice(0, 4); // YYYY
+  return dateStr.slice(0, 4);
 }
 
 // Interpolate between two colors
@@ -107,7 +111,6 @@ function aggregateByMonth(dates: string[], bandwidths: number[]): AggregatedData
     entry.endDate = date;
   });
   
-  // Average the bandwidth
   monthMap.forEach(entry => {
     entry.bandwidth = entry.bandwidth / entry.dates.length;
   });
@@ -140,7 +143,6 @@ function aggregateByYear(dates: string[], bandwidths: number[]): AggregatedData[
     entry.endDate = date;
   });
   
-  // Average the bandwidth
   yearMap.forEach(entry => {
     entry.bandwidth = entry.bandwidth / entry.dates.length;
   });
@@ -148,9 +150,27 @@ function aggregateByYear(dates: string[], bandwidths: number[]): AggregatedData[
   return Array.from(yearMap.values());
 }
 
-export default function DateSliderChart({ dateIndex, currentDate, onDateChange, playbackSpeed = 1.0 }: DateSliderChartProps) {
+// Format full date for display
+function formatFullDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+export default function DateSliderChart({
+  dateIndex,
+  currentDate,
+  onDateChange,
+  playbackSpeed,
+  onPlaybackSpeedChange,
+  relayCount,
+  locationCount,
+}: DateSliderChartProps) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const playSpeed = Math.round(500 / playbackSpeed); // Base 500ms adjusted by speed multiplier
+  const playSpeed = Math.round(500 / playbackSpeed);
   const [containerWidth, setContainerWidth] = useState(MAX_SLIDER_WIDTH);
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -163,9 +183,8 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
     const updateWidth = () => {
       if (containerRef.current) {
         const parentWidth = containerRef.current.parentElement?.clientWidth || window.innerWidth;
-        // Leave room for side content (at least 150px on each side)
         const availableWidth = Math.min(parentWidth - 300, MAX_SLIDER_WIDTH);
-        setContainerWidth(Math.max(300, availableWidth));
+        setContainerWidth(Math.max(400, availableWidth));
       }
     };
     
@@ -174,24 +193,21 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
     return () => window.removeEventListener('resize', updateWidth);
   }, []);
   
+  // Calculate content width (container minus padding)
+  const contentWidth = containerWidth - (HORIZONTAL_PADDING * 2);
+  
   // Determine aggregation mode and process data
-  const { aggregatedData, mode, barWidth } = useMemo(() => {
+  const { aggregatedData, mode } = useMemo(() => {
     if (!dates.length || !bandwidths.length) {
-      return { aggregatedData: [], mode: 'days' as AggregationMode, barWidth: IDEAL_BAR_WIDTH };
+      return { aggregatedData: [], mode: 'days' as AggregationMode };
     }
     
-    // Calculate available space for bars
-    const availableWidth = containerWidth - CONTROLS_WIDTH;
-    
-    // First, try showing all days
     let data: AggregatedData[];
     let aggregationMode: AggregationMode = 'days';
     
     if (dates.length > MAX_DAYS_DISPLAY) {
-      // Try months
       const monthData = aggregateByMonth(dates, bandwidths);
       if (monthData.length > MAX_MONTHS_DISPLAY) {
-        // Use years
         data = aggregateByYear(dates, bandwidths);
         aggregationMode = 'years';
       } else {
@@ -199,7 +215,6 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
         aggregationMode = 'months';
       }
     } else {
-      // Use days
       data = dates.map((date, i) => ({
         key: date,
         label: formatDateShort(date),
@@ -210,16 +225,11 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
       }));
     }
     
-    // Calculate bar width to fit in available space
-    const totalGaps = (data.length - 1) * BAR_GAP;
-    const spaceForBars = availableWidth - totalGaps;
-    let calculatedBarWidth = Math.floor(spaceForBars / data.length);
-    
-    // Clamp bar width
-    calculatedBarWidth = Math.max(MIN_BAR_WIDTH, Math.min(MAX_BAR_WIDTH, calculatedBarWidth));
-    
-    return { aggregatedData: data, mode: aggregationMode, barWidth: calculatedBarWidth };
-  }, [dates, bandwidths, containerWidth]);
+    return { aggregatedData: data, mode: aggregationMode };
+  }, [dates, bandwidths]);
+  
+  // Bar width is now handled by flexbox - each bar grows to fill space evenly
+  // This eliminates rounding errors from Math.floor
   
   // Chart data with colors and heights
   const chartData = useMemo(() => {
@@ -233,8 +243,6 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
     return aggregatedData.map((item) => {
       const normalized = (item.bandwidth - minBw) / range;
       const heightPercent = Math.max(15, normalized * 100);
-      
-      // Check if current date is within this bucket
       const isActive = item.dates.includes(currentDate);
       
       return {
@@ -247,14 +255,15 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
     });
   }, [aggregatedData, currentDate]);
   
-  // Find active bucket index
-  const activeBucketIndex = useMemo(() => {
-    return chartData.findIndex(d => d.isActive);
+  // Calculate slider progress percentage (combines bucket finding + progress calc)
+  const sliderProgress = useMemo(() => {
+    if (chartData.length === 0) return 0;
+    const activeIndex = chartData.findIndex(d => d.isActive);
+    return ((activeIndex + 0.5) / chartData.length) * 100;
   }, [chartData]);
   
-  // Handle bar click - navigate to first date in bucket
+  // Handle bar click
   const handleBarClick = useCallback((item: AggregatedData) => {
-    // If clicking on active bucket and it has multiple dates, cycle through them
     if (item.dates.includes(currentDate) && item.dates.length > 1) {
       const currentPosInBucket = item.dates.indexOf(currentDate);
       const nextPos = (currentPosInBucket + 1) % item.dates.length;
@@ -262,7 +271,6 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
       onDateChange(nextDate);
       window.location.hash = `date=${nextDate}`;
     } else {
-      // Navigate to first date in bucket
       const targetDate = item.dates[0];
       onDateChange(targetDate);
       window.location.hash = `date=${targetDate}`;
@@ -337,105 +345,73 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
   
   const currentBandwidth = bandwidths[currentIndex] || 0;
   
-  // Get range labels
-  const startLabel = mode === 'days' 
-    ? formatMonthYear(dates[0])
-    : mode === 'months'
-    ? formatMonth(aggregatedData[0]?.key || '')
-    : aggregatedData[0]?.key || '';
+  // Generate year labels for display (show every few years to avoid crowding)
+  const yearLabels = useMemo(() => {
+    if (mode !== 'years' || aggregatedData.length === 0) return [];
     
-  const endLabel = mode === 'days'
-    ? formatMonthYear(dates[dates.length - 1])
-    : mode === 'months'
-    ? formatMonth(aggregatedData[aggregatedData.length - 1]?.key || '')
-    : aggregatedData[aggregatedData.length - 1]?.key || '';
+    // Show label every N years based on count
+    const labelInterval = aggregatedData.length > 15 ? 3 : aggregatedData.length > 10 ? 2 : 1;
+    
+    return aggregatedData
+      .filter((_, i) => i % labelInterval === 0 || i === aggregatedData.length - 1)
+      .map(d => ({ key: d.key, label: `'${d.key.slice(2)}` }));
+  }, [mode, aggregatedData]);
   
   return (
     <div 
       ref={containerRef}
-      className="bg-black/40 backdrop-blur-md rounded-lg px-4 py-3 border border-tor-green/20"
+      className="bg-black/40 backdrop-blur-md rounded-lg border border-tor-green/20"
       style={{ 
         width: containerWidth,
         maxWidth: '100%',
+        padding: `14px ${HORIZONTAL_PADDING}px 12px`,
       }}
     >
-      {/* Main timeline with bars */}
-      <div className="flex items-end gap-1">
-        {/* Left controls - Play button stacked above Previous button */}
-        <div className="flex flex-col items-center gap-3 flex-shrink-0">
-          {/* Play/Pause button */}
-          <button
-            onClick={togglePlay}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 transition-colors"
-            aria-label={isPlaying ? 'Pause' : 'Play'}
-          >
-            {isPlaying ? (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <rect x="6" y="4" width="4" height="16" />
-                <rect x="14" y="4" width="4" height="16" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            )}
-          </button>
-          {/* Previous button */}
-          <button
-            onClick={goToPrevious}
-            disabled={currentIndex === 0}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            aria-label="Previous date"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-        </div>
-        
-        {/* Bandwidth bars - fixed height container */}
+      {/* HISTOGRAM SECTION - Full width */}
+      <div style={{ width: contentWidth }}>
+        {/* Bars */}
         <div 
-          className="flex-1 flex items-end justify-center"
+          className="flex items-end"
           style={{ 
-            height: '90px',
+            height: HISTOGRAM_HEIGHT,
             gap: `${BAR_GAP}px`,
+            width: contentWidth,
           }}
         >
           {chartData.map((bar) => (
             <div
               key={bar.key}
               className={`
-                relative cursor-pointer transition-all duration-100 group
+                relative cursor-pointer transition-all duration-100 group flex-1
                 hover:opacity-100
                 ${bar.isActive ? 'opacity-100' : 'opacity-60 hover:opacity-90'}
               `}
               style={{
-                width: `${barWidth}px`,
                 height: `${bar.heightPercent}%`,
                 minHeight: '3px',
                 backgroundColor: bar.isActive ? '#00ff88' : bar.color,
-                borderRadius: '1px 1px 0 0',
-                boxShadow: bar.isActive ? '0 0 6px #00ff88' : 'none',
+                borderRadius: '2px 2px 0 0',
+                boxShadow: bar.isActive ? '0 0 8px #00ff88' : 'none',
               }}
               onClick={() => handleBarClick(bar)}
               title={`${bar.label} - ${formatBandwidth(bar.bandwidth)}`}
             >
               {/* Hover tooltip */}
               <div className="
-                absolute bottom-full left-1/2 -translate-x-1/2 mb-1
-                bg-black/80 backdrop-blur-md border border-tor-green/40 rounded px-2 py-1
+                absolute bottom-full left-1/2 -translate-x-1/2 mb-2
+                bg-black/90 backdrop-blur-md border border-tor-green/40 rounded px-2 py-1.5
                 text-xs whitespace-nowrap
                 opacity-0 group-hover:opacity-100 transition-opacity
                 pointer-events-none z-20
               ">
-                <div className="text-tor-green font-medium text-[10px]">
+                <div className="text-tor-green font-medium text-[11px]">
                   {bar.label}
                 </div>
-                <div className="text-gray-400 text-[9px]">
+                <div className="text-gray-400 text-[10px]">
                   {formatBandwidth(bar.bandwidth)}
                 </div>
                 {mode !== 'days' && bar.dates.length > 1 && (
-                  <div className="text-gray-500 text-[8px]">
+                  <div className="text-gray-500 text-[9px]">
                     {bar.dates.length} days
                   </div>
                 )}
@@ -444,35 +420,154 @@ export default function DateSliderChart({ dateIndex, currentDate, onDateChange, 
           ))}
         </div>
         
+        {/* Slider track - same width as histogram */}
+        <div 
+          className="relative h-1.5 bg-white/10 rounded-full mt-2"
+          style={{ width: contentWidth }}
+        >
+          {/* Progress fill */}
+          <div 
+            className="absolute h-full bg-tor-green/30 rounded-full transition-all duration-150"
+            style={{ width: `${sliderProgress}%` }}
+          />
+          {/* Thumb */}
+          <div 
+            className="absolute w-3 h-3 bg-tor-green rounded-full -top-[3px] -ml-1.5 shadow-lg shadow-tor-green/30 transition-all duration-150"
+            style={{ left: `${sliderProgress}%` }}
+          />
+        </div>
+        
+        {/* Year labels - same width as histogram */}
+        {mode === 'years' && yearLabels.length > 0 && (
+          <div 
+            className="flex justify-between mt-1.5 text-[10px] text-gray-500"
+            style={{ width: contentWidth }}
+          >
+            {yearLabels.map(({ key, label }) => (
+              <span key={key}>{label}</span>
+            ))}
+          </div>
+        )}
+        
+        {/* For non-year modes, show start/end labels */}
+        {mode !== 'years' && (
+          <div 
+            className="flex justify-between mt-1.5 text-[10px] text-gray-500"
+            style={{ width: contentWidth }}
+          >
+            <span>
+              {mode === 'days' 
+                ? formatMonthYear(dates[0])
+                : formatMonth(aggregatedData[0]?.key || '')}
+            </span>
+            <span>
+              {mode === 'days'
+                ? formatMonthYear(dates[dates.length - 1])
+                : formatMonth(aggregatedData[aggregatedData.length - 1]?.key || '')}
+            </span>
+          </div>
+        )}
+      </div>
+      
+      {/* STATS ROW */}
+      <div className="flex items-center justify-center gap-5 mt-3 text-sm">
+        {/* Relay count */}
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-tor-green" />
+          <span className="text-white font-medium">{relayCount.toLocaleString()}</span>
+          <span className="text-gray-500 text-xs">relays</span>
+        </span>
+        
+        <span className="text-gray-600">•</span>
+        
+        {/* Bandwidth */}
+        <span className="text-white font-medium min-w-[70px] text-center">{formatBandwidth(currentBandwidth)}</span>
+        
+        <span className="text-gray-600">•</span>
+        
+        {/* Location count */}
+        <span className="flex items-center gap-1.5">
+          <svg className="w-3 h-3 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+          </svg>
+          <span className="text-white font-medium">{locationCount.toLocaleString()}</span>
+          <span className="text-gray-500 text-xs">locations</span>
+        </span>
+      </div>
+      
+      {/* CONTROLS ROW */}
+      <div className="flex items-center justify-center gap-2 mt-2">
+        {/* Previous button */}
+        <button
+          onClick={goToPrevious}
+          disabled={currentIndex === 0}
+          className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          aria-label="Previous date"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        
+        {/* Date display */}
+        <span className="text-tor-green font-medium text-sm min-w-[180px] text-center">
+          {formatFullDate(currentDate)}
+        </span>
+        
         {/* Next button */}
         <button
           onClick={goToNext}
           disabled={currentIndex === dates.length - 1}
-          className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           aria-label="Next date"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
           </svg>
         </button>
-      </div>
-      
-      {/* Date labels row */}
-      <div className="flex items-center justify-between mt-2 px-1">
-        <span className="text-[10px] text-gray-500 w-16">{startLabel}</span>
-        <div className="text-center flex-1 min-w-0">
-          <div className="text-tor-green text-sm font-medium truncate">{formatDateShort(currentDate)}</div>
-          <div className="text-gray-500 text-xs whitespace-nowrap">
-            <span className="text-gray-600">Network Bandwidth: </span>
-            {formatBandwidth(currentBandwidth)}
-          </div>
+        
+        {/* Spacer */}
+        <div className="w-3" />
+        
+        {/* Play/Pause button */}
+        <button
+          onClick={togglePlay}
+          className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 transition-colors"
+          aria-label={isPlaying ? 'Pause' : 'Play'}
+        >
+          {isPlaying ? (
+            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="4" width="4" height="16" />
+              <rect x="14" y="4" width="4" height="16" />
+            </svg>
+          ) : (
+            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          )}
+        </button>
+        
+        {/* Speed selector */}
+        <div className="flex items-center bg-black/30 rounded-md p-0.5">
+          {SPEED_OPTIONS.map(speed => (
+            <button
+              key={speed}
+              onClick={() => onPlaybackSpeedChange(speed)}
+              className={`px-2 py-1 text-xs rounded transition-colors ${
+                playbackSpeed === speed
+                  ? 'bg-tor-green text-black font-medium'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              {speed}x
+            </button>
+          ))}
         </div>
-        <span className="text-[10px] text-gray-500 w-16 text-right">{endLabel}</span>
       </div>
       
       {/* Keyboard hint */}
-      <div className="text-center text-[9px] text-gray-600 mt-1">
-        ← → navigate • Space play
+      <div className="text-center text-[9px] text-gray-600 mt-2">
+        ← → navigate • Space play/pause
       </div>
     </div>
   );
