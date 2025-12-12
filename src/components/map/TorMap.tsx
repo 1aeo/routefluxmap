@@ -931,61 +931,53 @@ export default function TorMap() {
         </div>
       </div>
 
-      {/* Stats panel - bottom right (offset to avoid map credits) */}
-      {relayData && (
-        <div className="absolute bottom-8 right-4 bg-black/40 backdrop-blur-md rounded-lg p-3 border border-tor-green/20 z-10 min-w-[130px]">
-          <div className="text-tor-green text-xl font-bold leading-tight">
-            {relayData.nodes.reduce((sum, n) => sum + n.relays.length, 0).toLocaleString()}
+      {/* Legend panel - bottom right (offset to avoid map credits) */}
+      <div className="absolute bottom-10 right-4 bg-black/40 backdrop-blur-md rounded-lg px-3 pt-3 pb-1.5 border border-tor-green/20 z-10 min-w-[130px]">
+        {/* Last updated */}
+        {dateIndex && (
+          <div className="text-gray-500 text-[10px] pb-2 mb-2 border-b border-white/10">
+            Last updated: <span className="text-tor-green">{new Date(dateIndex.lastUpdated).toLocaleDateString()}</span>
           </div>
-          <div className="text-gray-400 text-xs">Active Relays</div>
-          <div className="text-gray-500 text-[10px]">
-            {relayData.nodes.length} locations
+        )}
+        
+        {/* Relay Type Legend */}
+        <div className="space-y-0.5">
+          <div className="text-xs text-gray-400 mb-1">Relay Types</div>
+          <div className="flex items-center gap-1.5 text-[10px]">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.exit.slice(0, 3).join(',')})` }} />
+            <span className="text-gray-400">Exit</span>
+            <span className="text-gray-600 text-[9px]">– outbound traffic</span>
           </div>
-          {dateIndex && (
-            <div className="text-gray-600 text-[10px]">
-              {new Date(dateIndex.lastUpdated).toLocaleDateString()}
-            </div>
-          )}
-          
-          {/* Relay Type Legend */}
-          <div className="mt-2 pt-2 border-t border-white/10 space-y-0.5">
-            <div className="text-[9px] text-gray-500 mb-1">Relay Types</div>
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.exit.slice(0, 3).join(',')})` }} />
-              <span className="text-gray-400">Exit</span>
-              <span className="text-gray-600 text-[9px]">– outbound traffic</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.guard.slice(0, 3).join(',')})` }} />
-              <span className="text-gray-400">Guard</span>
-              <span className="text-gray-600 text-[9px]">– entry point</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.middle.slice(0, 3).join(',')})` }} />
-              <span className="text-gray-400">Middle</span>
-              <span className="text-gray-600 text-[9px]">– intermediate</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-[10px] mt-1">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.hidden.slice(0, 3).join(',')})` }} />
-              <span className="text-gray-400">HSDir</span>
-              <span className="text-gray-600 text-[9px]">– hidden services</span>
-            </div>
+          <div className="flex items-center gap-1.5 text-[10px]">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.guard.slice(0, 3).join(',')})` }} />
+            <span className="text-gray-400">Guard</span>
+            <span className="text-gray-600 text-[9px]">– entry point</span>
           </div>
-          
-          {/* GitHub link */}
-          <a 
-            href="https://github.com/1aeo/routefluxmap"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-2 pt-2 border-t border-white/10 flex items-center justify-center gap-1 text-gray-500 hover:text-tor-green transition-colors text-[10px]"
-          >
-            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-              <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
-            </svg>
-            GitHub
-          </a>
+          <div className="flex items-center gap-1.5 text-[10px]">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.middle.slice(0, 3).join(',')})` }} />
+            <span className="text-gray-400">Middle</span>
+            <span className="text-gray-600 text-[9px]">– intermediate</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-[10px] mt-1">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.hidden.slice(0, 3).join(',')})` }} />
+            <span className="text-gray-400">HSDir</span>
+            <span className="text-gray-600 text-[9px]">– hidden services</span>
+          </div>
         </div>
-      )}
+        
+        {/* Source Code link */}
+        <a 
+          href="https://github.com/1aeo/routefluxmap"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-center gap-1 text-gray-500 hover:text-tor-green transition-colors text-[10px]"
+        >
+          Source Code
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+        </a>
+      </div>
 
       {/* Date controls - bottom center with proper spacing from side content */}
       <div className="absolute bottom-4 left-0 right-0 z-10 flex justify-center pointer-events-none">
