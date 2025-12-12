@@ -604,7 +604,7 @@ export default function DateSliderChart({
         {/* Previous button */}
         <button
           onClick={goToPrevious}
-          disabled={currentIndex === 0}
+          disabled={currentIndex <= 0}
           className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           aria-label="Previous date"
         >
@@ -621,7 +621,7 @@ export default function DateSliderChart({
         {/* Next button */}
         <button
           onClick={goToNext}
-          disabled={currentIndex === dates.length - 1}
+          disabled={currentIndex < 0 || currentIndex >= dates.length - 1}
           className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           aria-label="Next date"
         >
