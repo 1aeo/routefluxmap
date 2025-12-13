@@ -84,7 +84,15 @@ export const config = {
 
   // Map settings - dark theme
   mapStyle: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-  mapAttribution: 'Map tiles by <a href="http://cartodb.com/attributions">CartoDB</a>',
+  
+  // Attribution sources (name, url, prefix?, suffix?)
+  attributions: [
+    { name: 'MapLibre', url: 'https://maplibre.org/', prefix: '', suffix: '' },
+    { name: 'CARTO', url: 'https://carto.com/attributions', prefix: '©', suffix: '' },
+    { name: 'OpenStreetMap', url: 'https://www.openstreetmap.org/copyright', prefix: '©', suffix: '' },
+    { name: 'MaxMind', url: 'https://www.maxmind.com', prefix: '', suffix: '' },
+    { name: 'TorFlow', url: 'https://github.com/unchartedsoftware/torflow', prefix: '', suffix: 'contributors' },
+  ] as const,
 
   // Relay marker colors (RGBA 0-255)
   relayColors: {

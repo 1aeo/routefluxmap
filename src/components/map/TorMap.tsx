@@ -828,7 +828,7 @@ export default function TorMap() {
         >
           <Map
             mapStyle={config.mapStyle}
-            attributionControl={true}
+            attributionControl={false}
             onLoad={() => setMapLoaded(true)}
           />
         </DeckGL>
@@ -847,6 +847,15 @@ export default function TorMap() {
         trafficType={trafficType}
         pathMode={pathMode}
       />
+
+      {/* Attribution - only show after loaded */}
+      {!initialLoading && mapLoaded && (
+        <div className="absolute bottom-1 right-0 z-50 px-1 text-[10px] bg-black/70 text-gray-400 pointer-events-auto">
+          {config.attributions.map(({ name, url, prefix, suffix }, i) => (
+            <span key={name}>{i > 0 && ', '}{prefix && `${prefix} `}<a href={url} target="_blank" rel="noopener" className="text-tor-green hover:underline">{name}</a>{suffix && ` ${suffix}`}</span>
+          ))}
+        </div>
+      )}
 
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
