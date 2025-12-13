@@ -49,10 +49,7 @@
   }
 
   /* Glow effect */
-  .glow {
-    box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
-  }
-
+  .glow,
   .glow-green {
     box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
   }
@@ -161,4 +158,47 @@
   .hover-label {
     @apply hidden;
   }
+}
+
+/* Mobile-specific improvements */
+@media (max-width: 640px) {
+  /* Prevent iOS bounce/overscroll */
+  html, body {
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
+  
+  /* Use dynamic viewport height for full-screen map */
+  .h-dvh {
+    height: 100dvh;
+  }
+  
+  /* Ensure minimum touch target size */
+  button, 
+  [role="button"],
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* But allow smaller buttons when explicitly sized */
+  .w-9, .w-8, .w-7 {
+    min-width: unset;
+    min-height: unset;
+  }
+}
+
+/* Safe area utility classes */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.mb-safe {
+  margin-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* Bottom controls container - respects safe area */
+.bottom-controls {
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
 }

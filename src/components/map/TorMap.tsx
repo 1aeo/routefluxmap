@@ -16,6 +16,11 @@ import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
 // Transition duration for relay dot fading
 const RELAY_TRANSITION_MS = 400;
+
+// Mobile layout constants
+const MOBILE_BREAKPOINT = 640;
+const MOBILE_CONTROLS_BOTTOM = 295; // px from bottom for zoom/legend on mobile
+const MOBILE_SLIDER_BOTTOM = 85;    // px from bottom for date slider on mobile
 import {
   calculateNodeRadius,
   calculateZoomScale,
@@ -109,6 +114,10 @@ export default function TorMap() {
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
   const [pathMode, setPathMode] = useState<'city' | 'country'>('city'); // City or Country path mode
   
+  // Mobile detection
+  const [isMobile, setIsMobile] = useState(false);
+  const [legendExpanded, setLegendExpanded] = useState(false);
+  
   // Relay transition state for smooth fading
   const [relayOpacity, setRelayOpacity] = useState(1);
   const relayTransitionRef = useRef<{ animationId: number | null; startTime: number }>({ animationId: null, startTime: 0 });
@@ -157,6 +166,14 @@ export default function TorMap() {
     return () => {
       if (countryHoverTimerRef.current) clearTimeout(countryHoverTimerRef.current);
     };
+  }, []);
+  
+  // Mobile detection
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
   }, []);
   
   // Helper to unproject screen coords to [lng, lat] via deck.gl viewport
@@ -828,9 +845,11 @@ export default function TorMap() {
         >
           <Map
             mapStyle={config.mapStyle}
-            attributionControl={true}
+            attributionControl={false}
             onLoad={() => setMapLoaded(true)}
-          />
+          >
+{/* Attribution handled by custom div outside event wrapper */}
+          </Map>
         </DeckGL>
       </div>
 
@@ -847,6 +866,15 @@ export default function TorMap() {
         trafficType={trafficType}
         pathMode={pathMode}
       />
+
+      {/* Attribution - only show after loaded */}
+      {!initialLoading && mapLoaded && (
+        <div className="absolute bottom-1 right-0 z-50 px-1 text-[10px] bg-black/70 text-gray-400 pointer-events-auto">
+          {config.attributions.map(({ name, url, prefix, suffix }, i) => (
+            <span key={name}>{i > 0 && ', '}{prefix && `${prefix} `}<a href={url} target="_blank" rel="noopener" className="text-tor-green hover:underline">{name}</a>{suffix && ` ${suffix}`}</span>
+          ))}
+        </div>
+      )}
 
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
@@ -941,56 +969,91 @@ export default function TorMap() {
       </div>
 
       {/* Legend panel - bottom right (offset to avoid map credits) */}
-      <div className="absolute bottom-10 right-4 bg-black/40 backdrop-blur-md rounded-lg px-3 pt-3 pb-1.5 border border-tor-green/20 z-10 min-w-[130px]">
-        {/* Last updated */}
-        {dateIndex && (
-          <div className="text-gray-500 text-[10px] pb-2 mb-2 border-b border-white/10">
-            Last updated: <span className="text-tor-green">{new Date(dateIndex.lastUpdated).toLocaleDateString()}</span>
+      {/* Mobile: Collapsible, positioned above date slider. Desktop: Always visible */}
+      <div 
+        className={`absolute z-20 bg-black/40 backdrop-blur-md rounded-lg border border-tor-green/20 transition-all duration-200 ${
+          isMobile ? 'right-3' : 'bottom-10 right-4'
+        }`}
+        style={isMobile 
+          ? { bottom: MOBILE_CONTROLS_BOTTOM, ...(legendExpanded ? { minWidth: '130px' } : { width: '40px', height: '40px' }) }
+          : { minWidth: '130px' }
+        }
+      >
+        {/* Mobile collapsed state - just an icon button */}
+        {isMobile && !legendExpanded ? (
+          <button
+            onClick={() => setLegendExpanded(true)}
+            className="w-full h-full flex items-center justify-center text-tor-green"
+            aria-label="Show legend"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+        ) : (
+          <div className="px-3 pt-3 pb-1.5 relative">
+            {/* Mobile: Close button - positioned prominently */}
+            {isMobile && (
+              <button
+                onClick={() => setLegendExpanded(false)}
+                className="absolute -top-2 -right-2 w-7 h-7 flex items-center justify-center bg-black/80 rounded-full border border-tor-green/30 text-gray-300 active:bg-tor-green/30"
+                aria-label="Close legend"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+            
+            {/* Last updated */}
+            {dateIndex && (
+              <div className="text-gray-500 text-[10px] pb-2 mb-2 border-b border-white/10">
+                Last updated: <span className="text-tor-green">{new Date(dateIndex.lastUpdated).toLocaleDateString()}</span>
+              </div>
+            )}
+            
+            {/* Relay Type Legend */}
+            <div className="space-y-0.5">
+              <div className="text-xs text-gray-400 mb-1">Relay Types</div>
+              {[
+                { key: 'exit' as const, label: 'Exit', desc: 'outbound traffic', extraClass: '' },
+                { key: 'guard' as const, label: 'Guard', desc: 'entry point', extraClass: '' },
+                { key: 'middle' as const, label: 'Middle', desc: 'intermediate', extraClass: '' },
+                { key: 'hidden' as const, label: 'HSDir', desc: 'hidden services', extraClass: 'mt-1' },
+              ].map(({ key, label, desc, extraClass }) => (
+                <div key={key} className={`flex items-center gap-1.5 text-[10px] ${extraClass}`}>
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors[key].slice(0, 3).join(',')})` }} />
+                  <span className="text-gray-400">{label}</span>
+                  {!isMobile && <span className="text-gray-600 text-[9px]">– {desc}</span>}
+                </div>
+              ))}
+            </div>
+            
+            {/* Source Code link */}
+            <a 
+              href="https://github.com/1aeo/routefluxmap"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-center gap-1 text-gray-500 hover:text-tor-green transition-colors text-[10px]"
+            >
+              Source Code
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </a>
           </div>
         )}
-        
-        {/* Relay Type Legend */}
-        <div className="space-y-0.5">
-          <div className="text-xs text-gray-400 mb-1">Relay Types</div>
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.exit.slice(0, 3).join(',')})` }} />
-            <span className="text-gray-400">Exit</span>
-            <span className="text-gray-600 text-[9px]">– outbound traffic</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.guard.slice(0, 3).join(',')})` }} />
-            <span className="text-gray-400">Guard</span>
-            <span className="text-gray-600 text-[9px]">– entry point</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.middle.slice(0, 3).join(',')})` }} />
-            <span className="text-gray-400">Middle</span>
-            <span className="text-gray-600 text-[9px]">– intermediate</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-[10px] mt-1">
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors.hidden.slice(0, 3).join(',')})` }} />
-            <span className="text-gray-400">HSDir</span>
-            <span className="text-gray-600 text-[9px]">– hidden services</span>
-          </div>
-        </div>
-        
-        {/* Source Code link */}
-        <a 
-          href="https://github.com/1aeo/routefluxmap"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-center gap-1 text-gray-500 hover:text-tor-green transition-colors text-[10px]"
-        >
-          Source Code
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-          </svg>
-        </a>
       </div>
 
       {/* Date controls - bottom center with proper spacing from side content */}
-      <div className="absolute bottom-4 left-0 right-0 z-10 flex justify-center pointer-events-none">
-        <div className="pointer-events-auto">
+      {/* Mobile: Full width with generous bottom padding to clear gesture nav. Desktop: Centered with margins */}
+      <div 
+        className={`absolute left-0 right-0 z-10 flex justify-center pointer-events-none ${
+          isMobile ? 'px-2' : 'bottom-4'
+        }`}
+        style={isMobile ? { bottom: `max(${MOBILE_SLIDER_BOTTOM}px, calc(env(safe-area-inset-bottom, 24px) + 60px))` } : undefined}
+      >
+        <div className="pointer-events-auto w-full max-w-[calc(100%-16px)] sm:w-auto sm:max-w-none">
           {/* Combined date slider with histogram - only show when multiple dates */}
           {dateIndex && currentDate && dateIndex.dates.length > 1 && relayStats && (
             <DateSliderChart
@@ -1009,9 +1072,9 @@ export default function TorMap() {
             <div className="bg-black/40 backdrop-blur-md rounded-lg px-3 py-2 border border-tor-green/20 text-center">
               <div className="text-tor-green text-sm font-medium">
                 {new Date(currentDate).toLocaleDateString('en-US', {
-                  weekday: 'long',
+                  weekday: isMobile ? 'short' : 'long',
                   year: 'numeric',
-                  month: 'long',
+                  month: isMobile ? 'short' : 'long',
                   day: 'numeric',
                 })}
               </div>
@@ -1020,16 +1083,20 @@ export default function TorMap() {
         </div>
       </div>
 
-      {/* Zoom controls - bottom left */}
-      <div className="absolute bottom-8 left-4 z-10 flex flex-col gap-1">
+      {/* Zoom controls - responsive positioning */}
+      {/* Mobile: above date slider. Desktop: bottom-left */}
+      <div 
+        className={`absolute z-10 flex flex-col gap-1 ${isMobile ? 'left-3' : 'bottom-8 left-4'}`}
+        style={isMobile ? { bottom: MOBILE_CONTROLS_BOTTOM } : undefined}
+      >
         {/* Settings Toggle */}
         <button
           onClick={() => setShowSettings(!showSettings)}
-          className={`w-8 h-8 flex items-center justify-center rounded-lg backdrop-blur-md border transition-colors ${
+          className={`w-9 h-9 flex items-center justify-center rounded-lg backdrop-blur-md border transition-colors ${
             showSettings 
               ? 'bg-tor-green text-black border-tor-green' 
-              : 'bg-black/40 border-tor-green/20 text-tor-green hover:bg-tor-green/20'
-          }`}
+              : 'bg-black/40 border-tor-green/20 text-tor-green active:bg-tor-green/30'
+          } ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
           aria-label="Toggle settings"
           title="Line Settings"
         >
@@ -1053,21 +1120,22 @@ export default function TorMap() {
           setSpeed={setLineSpeedFactor}
         />
 
+        {/* Zoom buttons */}
         <button
           onClick={() => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }))}
-          className="w-8 h-8 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green hover:bg-tor-green/20 transition-colors"
+          className={`w-9 h-9 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green active:bg-tor-green/30 transition-colors ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
           aria-label="Zoom in"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12M6 12h12" />
           </svg>
         </button>
         <button
           onClick={() => setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom - 1, 1) }))}
-          className="w-8 h-8 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green hover:bg-tor-green/20 transition-colors"
+          className={`w-9 h-9 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green active:bg-tor-green/30 transition-colors ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
           aria-label="Zoom out"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 12h12" />
           </svg>
         </button>

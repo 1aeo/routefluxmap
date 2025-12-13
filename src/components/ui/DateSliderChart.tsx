@@ -38,8 +38,9 @@ interface AggregatedData {
 // Layout constants
 const MAX_SLIDER_WIDTH = 650;
 const BAR_GAP = 2;
-const HISTOGRAM_HEIGHT = 70;
-const HORIZONTAL_PADDING = 16; // px-4 = 16px each side
+const HISTOGRAM_HEIGHT = { desktop: 70, mobile: 45 };
+const HORIZONTAL_PADDING = { desktop: 16, mobile: 8 };
+const MOBILE_BREAKPOINT = 500;
 
 // Thresholds for aggregation
 const MAX_DAYS_DISPLAY = 120;
@@ -47,6 +48,34 @@ const MAX_MONTHS_DISPLAY = 36;
 
 // Speed options
 const SPEED_OPTIONS = [1, 2, 4] as const;
+
+// Reusable SVG icons
+const ChevronLeftIcon = ({ size = 4 }: { size?: number }) => (
+  <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+  </svg>
+);
+const ChevronRightIcon = ({ size = 4 }: { size?: number }) => (
+  <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+  </svg>
+);
+const PlayIcon = ({ size = 3.5 }: { size?: number }) => (
+  <svg className={`w-${size} h-${size}`} fill="currentColor" viewBox="0 0 24 24">
+    <path d="M8 5v14l11-7z" />
+  </svg>
+);
+const PauseIcon = ({ size = 3.5 }: { size?: number }) => (
+  <svg className={`w-${size} h-${size}`} fill="currentColor" viewBox="0 0 24 24">
+    <rect x="6" y="4" width="4" height="16" />
+    <rect x="14" y="4" width="4" height="16" />
+  </svg>
+);
+const LocationIcon = ({ size = 3 }: { size?: number }) => (
+  <svg className={`w-${size} h-${size} text-gray-400`} fill="currentColor" viewBox="0 0 20 20">
+    <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+  </svg>
+);
 
 // Format bandwidth for display
 function formatBandwidth(gbits: number): string {
@@ -172,6 +201,7 @@ export default function DateSliderChart({
   const [isPlaying, setIsPlaying] = useState(false);
   const playSpeed = Math.round(500 / playbackSpeed);
   const [containerWidth, setContainerWidth] = useState(MAX_SLIDER_WIDTH);
+  const [isMobile, setIsMobile] = useState(false);
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sliderTrackRef = useRef<HTMLDivElement>(null);
@@ -190,13 +220,25 @@ export default function DateSliderChart({
   }, [dates]);
   const currentIndex = dateToIndex.get(currentDate) ?? -1;
   
-  // Measure container width
+  // Measure container width and detect mobile
   useEffect(() => {
     const updateWidth = () => {
+      const windowWidth = window.innerWidth;
+      const mobile = windowWidth < MOBILE_BREAKPOINT;
+      setIsMobile(mobile);
+      
       if (containerRef.current) {
-        const parentWidth = containerRef.current.parentElement?.clientWidth || window.innerWidth;
-        const availableWidth = Math.min(parentWidth - 300, MAX_SLIDER_WIDTH);
-        setContainerWidth(Math.max(400, availableWidth));
+        const parentWidth = containerRef.current.parentElement?.clientWidth || windowWidth;
+        
+        if (mobile) {
+          // On mobile: use nearly full width with small padding
+          const availableWidth = Math.min(parentWidth - 16, windowWidth - 16);
+          setContainerWidth(Math.max(280, availableWidth));
+        } else {
+          // On desktop: original logic with more margin for side panels
+          const availableWidth = Math.min(parentWidth - 300, MAX_SLIDER_WIDTH);
+          setContainerWidth(Math.max(400, availableWidth));
+        }
       }
     };
     
@@ -205,8 +247,10 @@ export default function DateSliderChart({
     return () => window.removeEventListener('resize', updateWidth);
   }, []);
   
-  // Calculate content width (container minus padding)
-  const contentWidth = containerWidth - (HORIZONTAL_PADDING * 2);
+  // Calculate content width (container minus padding) - responsive
+  const horizontalPadding = isMobile ? HORIZONTAL_PADDING.mobile : HORIZONTAL_PADDING.desktop;
+  const contentWidth = containerWidth - (horizontalPadding * 2);
+  const histogramHeight = isMobile ? HISTOGRAM_HEIGHT.mobile : HISTOGRAM_HEIGHT.desktop;
   
   // Determine aggregation mode and process data
   const { aggregatedData, mode } = useMemo(() => {
@@ -454,7 +498,7 @@ export default function DateSliderChart({
       style={{ 
         width: containerWidth,
         maxWidth: '100%',
-        padding: `14px ${HORIZONTAL_PADDING}px 12px`,
+        padding: isMobile ? `8px ${horizontalPadding}px 6px` : `14px ${horizontalPadding}px 12px`,
         // Single source of truth for alignment:
         // histogram, slider track, and labels all use var(--content-width)
         ['--content-width' as any]: `${contentWidth}px`,
@@ -466,7 +510,7 @@ export default function DateSliderChart({
         <div 
           className="flex items-end"
           style={{ 
-            height: HISTOGRAM_HEIGHT,
+            height: histogramHeight,
             gap: `${BAR_GAP}px`,
             width: 'var(--content-width)',
           }}
@@ -519,9 +563,9 @@ export default function DateSliderChart({
         {/* Slider track - same width as histogram, now interactive */}
         <div 
           ref={sliderTrackRef}
-          className={`relative h-2 bg-white/10 rounded-full mt-2 cursor-pointer select-none ${
+          className={`relative bg-white/10 rounded-full cursor-pointer select-none ${
             isDragging ? 'cursor-grabbing' : 'hover:bg-white/15'
-          }`}
+          } ${isMobile ? 'h-1.5 mt-1.5' : 'h-2 mt-2'}`}
           style={{ width: 'var(--content-width)' }}
           onMouseDown={handleSliderMouseDown}
         >
@@ -534,9 +578,9 @@ export default function DateSliderChart({
           />
           {/* Thumb */}
           <div 
-            className={`absolute w-3.5 h-3.5 bg-tor-green rounded-full -top-[3px] -ml-[7px] shadow-lg shadow-tor-green/40 pointer-events-none ${
+            className={`absolute bg-tor-green rounded-full shadow-lg shadow-tor-green/40 pointer-events-none ${
               isDragging ? 'scale-110' : 'transition-all duration-150 hover:scale-110'
-            }`}
+            } ${isMobile ? 'w-3 h-3 -top-[3px] -ml-[6px]' : 'w-3.5 h-3.5 -top-[3px] -ml-[7px]'}`}
             style={{ left: `${sliderProgress}%` }}
           />
         </div>
@@ -544,7 +588,7 @@ export default function DateSliderChart({
         {/* Year labels - same width as histogram */}
         {mode === 'years' && yearLabels.length > 0 && (
           <div 
-            className="flex justify-between mt-1.5 text-[10px] text-gray-500"
+            className={`flex justify-between text-gray-500 ${isMobile ? 'mt-1 text-[9px]' : 'mt-1.5 text-[10px]'}`}
             style={{ width: 'var(--content-width)' }}
           >
             {yearLabels.map(({ key, label }) => (
@@ -556,7 +600,7 @@ export default function DateSliderChart({
         {/* For non-year modes, show start/end labels */}
         {mode !== 'years' && (
           <div 
-            className="flex justify-between mt-1.5 text-[10px] text-gray-500"
+            className={`flex justify-between text-gray-500 ${isMobile ? 'mt-1 text-[9px]' : 'mt-1.5 text-[10px]'}`}
             style={{ width: 'var(--content-width)' }}
           >
             <span>
@@ -573,106 +617,109 @@ export default function DateSliderChart({
         )}
       </div>
       
-      {/* STATS ROW */}
-      <div className="flex items-center justify-center gap-5 mt-3 text-sm">
-        {/* Relay count */}
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-tor-green" />
+      {/* STATS ROW - Responsive sizing */}
+      <div className={`flex items-center justify-center ${isMobile ? 'gap-2 mt-1.5 text-[10px]' : 'gap-5 mt-3 text-sm'}`}>
+        <span className={`flex items-center ${isMobile ? 'gap-1' : 'gap-1.5'}`}>
+          <span className={`rounded-full bg-tor-green ${isMobile ? 'w-1.5 h-1.5' : 'w-2 h-2'}`} />
           <span className="text-white font-medium">{relayCount.toLocaleString()}</span>
-          <span className="text-gray-500 text-xs">relays</span>
+          {!isMobile && <span className="text-gray-500 text-xs">relays</span>}
+          {isMobile && <span className="text-gray-500">relays</span>}
         </span>
-        
-        <span className="text-gray-600">•</span>
-        
-        {/* Bandwidth */}
-        <span className="text-white font-medium min-w-[70px] text-center">{formatBandwidth(currentBandwidth)}</span>
-        
-        <span className="text-gray-600">•</span>
-        
-        {/* Location count */}
-        <span className="flex items-center gap-1.5">
-          <svg className="w-3 h-3 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-            <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
-          </svg>
+        <span className="text-gray-600">{isMobile ? '·' : '•'}</span>
+        <span className={`text-white font-medium ${isMobile ? '' : 'min-w-[70px] text-center'}`}>{formatBandwidth(currentBandwidth)}</span>
+        <span className="text-gray-600">{isMobile ? '·' : '•'}</span>
+        <span className={`flex items-center ${isMobile ? 'gap-0.5' : 'gap-1.5'}`}>
+          <LocationIcon size={isMobile ? 2 : 3} />
           <span className="text-white font-medium">{locationCount.toLocaleString()}</span>
-          <span className="text-gray-500 text-xs">locations</span>
+          {!isMobile && <span className="text-gray-500 text-xs">locations</span>}
         </span>
       </div>
       
-      {/* CONTROLS ROW */}
-      <div className="flex items-center justify-center gap-2 mt-2">
+      {/* CONTROLS ROW - Responsive */}
+      <div className={`flex items-center justify-center ${isMobile ? 'gap-1.5 mt-1.5' : 'gap-2 mt-2'}`}>
         {/* Previous button */}
         <button
           onClick={goToPrevious}
           disabled={currentIndex <= 0}
-          className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className={`flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green disabled:opacity-30 disabled:cursor-not-allowed transition-colors ${
+            isMobile ? 'w-8 h-8 active:bg-tor-green/40' : 'w-7 h-7 hover:bg-tor-green/30'
+          }`}
           aria-label="Previous date"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
-          </svg>
+          <ChevronLeftIcon size={isMobile ? 3.5 : 4} />
         </button>
         
         {/* Date display */}
-        <span className="text-tor-green font-medium text-sm min-w-[180px] text-center">
-          {formatFullDate(currentDate)}
+        <span className={`text-tor-green font-medium text-center ${
+          isMobile ? 'text-[11px] flex-1 truncate px-0.5' : 'text-sm min-w-[180px]'
+        }`}>
+          {isMobile 
+            ? new Date(currentDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            : formatFullDate(currentDate)
+          }
         </span>
         
         {/* Next button */}
         <button
           onClick={goToNext}
           disabled={currentIndex < 0 || currentIndex >= dates.length - 1}
-          className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className={`flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green disabled:opacity-30 disabled:cursor-not-allowed transition-colors ${
+            isMobile ? 'w-8 h-8 active:bg-tor-green/40' : 'w-7 h-7 hover:bg-tor-green/30'
+          }`}
           aria-label="Next date"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
-          </svg>
+          <ChevronRightIcon size={isMobile ? 3.5 : 4} />
         </button>
         
-        {/* Spacer */}
-        <div className="w-3" />
+        {/* Spacer - desktop only */}
+        {!isMobile && <div className="w-3" />}
         
         {/* Play/Pause button */}
         <button
           onClick={togglePlay}
-          className="w-7 h-7 flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green hover:bg-tor-green/30 transition-colors"
+          className={`flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green transition-colors ${
+            isMobile ? 'w-8 h-8 active:bg-tor-green/40' : 'w-7 h-7 hover:bg-tor-green/30'
+          }`}
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
-          {isPlaying ? (
-            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="4" width="4" height="16" />
-              <rect x="14" y="4" width="4" height="16" />
-            </svg>
-          ) : (
-            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
+          {isPlaying ? <PauseIcon size={3.5} /> : <PlayIcon size={3.5} />}
         </button>
         
-        {/* Speed selector */}
-        <div className="flex items-center bg-black/30 rounded-md p-0.5">
-          {SPEED_OPTIONS.map(speed => (
-            <button
-              key={speed}
-              onClick={() => onPlaybackSpeedChange(speed)}
-              className={`px-2 py-1 text-xs rounded transition-colors ${
-                playbackSpeed === speed
-                  ? 'bg-tor-green text-black font-medium'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              {speed}x
-            </button>
-          ))}
-        </div>
+        {/* Speed selector - different UI for mobile vs desktop */}
+        {isMobile ? (
+          <button
+            onClick={() => {
+              const idx = SPEED_OPTIONS.indexOf(playbackSpeed as typeof SPEED_OPTIONS[number]);
+              onPlaybackSpeedChange(SPEED_OPTIONS[(idx + 1) % SPEED_OPTIONS.length]);
+            }}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-black/30 text-tor-green text-[10px] font-medium active:bg-tor-green/20 transition-colors"
+            aria-label={`Speed: ${playbackSpeed}x (tap to change)`}
+          >
+            {playbackSpeed}x
+          </button>
+        ) : (
+          <div className="flex items-center bg-black/30 rounded-md p-0.5">
+            {SPEED_OPTIONS.map(speed => (
+              <button
+                key={speed}
+                onClick={() => onPlaybackSpeedChange(speed)}
+                className={`px-2 py-1 text-xs rounded transition-colors ${
+                  playbackSpeed === speed ? 'bg-tor-green text-black font-medium' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                {speed}x
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       
-      {/* Keyboard hint */}
-      <div className="text-center text-[9px] text-gray-600 mt-2">
-        ← → navigate • Space play/pause
-      </div>
+      {/* Keyboard hint - hide on mobile */}
+      {!isMobile && (
+        <div className="text-center text-[9px] text-gray-600 mt-2">
+          ← → navigate • Space play/pause
+        </div>
+      )}
     </div>
   );
 }
