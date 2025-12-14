@@ -23,9 +23,9 @@ export interface AggregatedNode {
   label: string;               // Summary: "RelayName" or "N relays at location"
   relays: RelayInfo[];         // Individual relays for popup
   
-  // Pre-computed properties for efficient rendering
-  type: 'exit' | 'guard' | 'middle';
-  isHSDir: boolean;
+  // Pre-computed properties (optional - computed at runtime if missing)
+  type?: 'exit' | 'guard' | 'middle';
+  isHSDir?: boolean;
   
   // Backward compatibility: old data may have normalized_bandwidth instead of selectionWeight
   normalized_bandwidth?: number;

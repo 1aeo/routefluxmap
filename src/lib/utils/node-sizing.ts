@@ -1,98 +1,44 @@
 /**
  * Node Sizing Utilities
- * Extracted from TorMap.tsx for testability and reusability
+ * 
+ * Sizes relay nodes by count (number of relays at that location).
+ * Uses square root scaling for perceptually accurate area comparison.
  */
 
 import type { AggregatedNode } from '../types';
 import { config } from '../config';
 
 /**
- * Configuration for node radius calculation
+ * Cap for relay count normalization.
+ * Data centers can have 500-1000+ relays at one location.
+ * Capping at 400 provides good visual differentiation:
+ * - 90 relays → 47% of range
+ * - 200 relays → 71% of range  
+ * - 400+ relays → max size
  */
-export interface NodeRadiusConfig {
-  minRadius: number;
-  maxRadius: number;
-}
+const RELAY_COUNT_CAP = 400;
+
+// Pre-compute for efficiency
+const SQRT_CAP = Math.sqrt(RELAY_COUNT_CAP);
+const RADIUS_RANGE = config.nodeRadius.max - config.nodeRadius.min;
 
 /**
- * Calculate the display radius for a relay node marker
- *
- * Uses a combination of relay count (cluster density) and bandwidth
- * to determine visual size. At lower zoom levels, relay count is
- * emphasized more to highlight "major hubs".
- *
- * @param node - The aggregated node containing relay data
- * @param zoom - Current map zoom level
- * @param maxRelayCount - Maximum relay count across all nodes (for normalization)
- * @param maxBandwidth - Maximum bandwidth across all nodes (for normalization)
- * @param radiusConfig - Optional min/max radius configuration
- * @returns The calculated radius in pixels
+ * Calculate the display radius for a relay node marker.
+ * 
+ * Uses square root scaling: 4x relays = 4x area = 2x radius
  */
-export function calculateNodeRadius(
-  node: AggregatedNode,
-  zoom: number,
-  maxRelayCount: number,
-  maxBandwidth: number,
-  radiusConfig: NodeRadiusConfig = {
-    minRadius: config.nodeRadius.min,
-    maxRadius: config.nodeRadius.max,
-  }
-): number {
-  const { minRadius, maxRadius } = radiusConfig;
-
-  // Use log scale for relay count to handle large differences
-  // More aggressive scaling for clusters
+export function calculateNodeRadius(node: AggregatedNode): number {
   const relayCount = node.relays.length;
-  const countNormalized =
-    Math.log(1 + relayCount * 2) / Math.log(1 + maxRelayCount * 2);
 
-  // Also factor in bandwidth (secondary)
-  const bwNormalized = node.bandwidth / (maxBandwidth || 1);
+  // Single relay = minimum size
+  if (relayCount <= 1) {
+    return config.nodeRadius.min;
+  }
 
-  // Combine: count (density) vs bandwidth
-  // At lower zooms, emphasize count more to show "major hubs"
-  const zoomFactor = Math.max(0, 1 - (zoom - 1) / 4); // 1.0 at zoom 1, 0.0 at zoom 5
-  const countWeight = 0.8 + zoomFactor * 0.15; // 0.95 at zoom 1, 0.8 at zoom 5
-  const bwWeight = 1 - countWeight;
+  // Cap and normalize using square root scaling
+  const cappedCount = Math.min(relayCount, RELAY_COUNT_CAP);
+  const normalized = Math.sqrt(cappedCount) / SQRT_CAP;
 
-  const combined =
-    countNormalized * countWeight + Math.sqrt(bwNormalized) * bwWeight;
-
-  // Apply non-linear scaling for better visual differentiation
-  // Exponent: higher = smaller dots for low values
-  // At zoom 1-2, we want high differentiation
-  const exponent = zoom < 3 ? 0.9 : 0.7;
-  const radius = minRadius + (maxRadius - minRadius) * Math.pow(combined, exponent);
-
-  return radius;
+  return config.nodeRadius.min + RADIUS_RANGE * normalized;
 }
-
-/**
- * Calculate zoom-based scaling factor for node markers
- *
- * @param zoom - Current map zoom level
- * @returns Scale factor for radius
- */
-export function calculateZoomScale(zoom: number): number {
-  // At zoom 3, scale = 1. At zoom 10, scale = ~4
-  return Math.pow(1.2, zoom - 3);
-}
-
-/**
- * Get min/max pixel constraints based on zoom level
- *
- * @param zoom - Current map zoom level
- * @returns Object with baseMinPixels and baseMaxPixels
- */
-export function getZoomPixelConstraints(zoom: number): {
-  baseMinPixels: number;
-  baseMaxPixels: number;
-} {
-  // At zoom 1-2: min 2, max 15 (reduced max to avoid clutter)
-  const baseMinPixels = zoom < 4 ? 2 : zoom < 6 ? 3 : 4;
-  const baseMaxPixels = zoom < 3 ? 15 : zoom < 4 ? 20 : zoom < 6 ? 30 : 50;
-
-  return { baseMinPixels, baseMaxPixels };
-}
-
 

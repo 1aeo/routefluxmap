@@ -21,11 +21,7 @@ const RELAY_TRANSITION_MS = 400;
 const MOBILE_BREAKPOINT = 640;
 const MOBILE_CONTROLS_BOTTOM = 295; // px from bottom for zoom/legend on mobile
 const MOBILE_SLIDER_BOTTOM = 85;    // px from bottom for date slider on mobile
-import {
-  calculateNodeRadius,
-  calculateZoomScale,
-  getZoomPixelConstraints,
-} from '../../lib/utils/node-sizing';
+import { calculateNodeRadius } from '../../lib/utils/node-sizing';
 import RelayPopup from '../ui/RelayPopup';
 import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
@@ -108,6 +104,7 @@ export default function TorMap() {
   const [lineDensityFactor, setLineDensityFactor] = useState(0.5);
   const [lineOpacityFactor, setLineOpacityFactor] = useState(0.5);
   const [lineSpeedFactor, setLineSpeedFactor] = useState(0.5);
+  const [relaySizeScale, setRelaySizeScale] = useState(0.5); // 0.5 = 50% slider = 1x size (current)
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0); // 1x playback speed for date animation
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
@@ -694,17 +691,6 @@ export default function TorMap() {
   // Check if we have actual relay nodes to display
   const hasRelayNodes = !!(relayData && relayData.nodes && relayData.nodes.length > 0);
   
-  // Memoize expensive relay calculations (only recompute when relayData changes)
-  const { maxRelayCount, maxBandwidth } = useMemo(() => {
-    if (!relayData?.nodes?.length) {
-      return { maxRelayCount: 1, maxBandwidth: 0 };
-    }
-    return {
-      maxRelayCount: Math.max(...relayData.nodes.map(n => n.relays.length), 1),
-      maxBandwidth: relayData.minMax.max,
-    };
-  }, [relayData]);
-
   // Memoize relay stats for timeline display (avoids reduce on every render)
   const relayStats = useMemo(() => {
     if (!relayData?.nodes) return null;
@@ -714,11 +700,6 @@ export default function TorMap() {
     };
   }, [relayData]);
 
-  // Memoize zoom-based calculations (only recompute when zoom changes)
-  const { zoomScale, baseMinPixels, baseMaxPixels } = useMemo(() => ({
-    zoomScale: calculateZoomScale(viewState.zoom),
-    ...getZoomPixelConstraints(viewState.zoom),
-  }), [viewState.zoom]);
 
   // Create Deck.gl layers (relay markers + country choropleth)
   const baseLayers = useMemo(() => {
@@ -750,25 +731,25 @@ export default function TorMap() {
           opacity: 0.85 * relayOpacity, // Apply transition opacity
           stroked: true,
           filled: true,
-          radiusScale: zoomScale,
-          radiusMinPixels: baseMinPixels,
-          radiusMaxPixels: baseMaxPixels,
+          // Use pixel units so getRadius returns actual screen pixels
+          radiusUnits: 'pixels',
+          radiusScale: 1,
+          radiusMinPixels: 0,
+          radiusMaxPixels: Infinity,
           lineWidthMinPixels: 1,
           getPosition: (d: AggregatedNode) => [d.lng, d.lat],
           getRadius: (d: AggregatedNode) =>
-            calculateNodeRadius(d, viewState.zoom, maxRelayCount, maxBandwidth),
+            calculateNodeRadius(d) * (relaySizeScale * 1.2),
           getFillColor: (d: AggregatedNode) => {
-            // Use pre-calculated type for efficient rendering (no iteration needed)
-            if (d.type) {
-              if (d.type === 'exit') return config.relayColors.exit;
-              if (d.type === 'guard') return config.relayColors.guard;
-              return config.relayColors.middle;
+            // Color by majority relay type at this location
+            let exits = 0, guards = 0, middles = 0;
+            for (const r of d.relays) {
+              if (r.flags.includes('E')) exits++;
+              else if (r.flags.includes('G')) guards++;
+              else middles++;
             }
-            // Fallback for legacy data (calculated on the fly)
-            const hasExit = d.relays.some(r => r.flags.includes('E'));
-            const hasGuard = d.relays.some(r => r.flags.includes('G'));
-            if (hasExit) return config.relayColors.exit;
-            if (hasGuard) return config.relayColors.guard;
+            if (exits >= guards && exits >= middles) return config.relayColors.exit;
+            if (guards >= middles) return config.relayColors.guard;
             return config.relayColors.middle;
           },
           getLineColor: [0, 255, 136, Math.round(100 * relayOpacity)], // Green outline with transition opacity
@@ -776,7 +757,7 @@ export default function TorMap() {
           onHover: handleHover,
           updateTriggers: {
             getFillColor: [relayData],
-            getRadius: [relayData, viewState.zoom, maxRelayCount, maxBandwidth],
+            getRadius: [relayData, relaySizeScale],
             opacity: [relayOpacity],
             getLineColor: [relayOpacity],
           },
@@ -785,7 +766,7 @@ export default function TorMap() {
     }
     
     return result;
-  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
+  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, relayOpacity, relaySizeScale]);
 
   const layers = baseLayers;
 
@@ -1108,6 +1089,8 @@ export default function TorMap() {
           setOpacity={setLineOpacityFactor}
           speed={lineSpeedFactor}
           setSpeed={setLineSpeedFactor}
+          relaySize={relaySizeScale}
+          setRelaySize={setRelaySizeScale}
         />
 
         {/* Zoom buttons */}

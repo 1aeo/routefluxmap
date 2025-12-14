@@ -31,9 +31,10 @@ export const config = {
   },
 
   // Node radius (pixels)
+  // Sized by relay count only (bandwidth shown via particles)
   nodeRadius: {
-    min: 5,
-    max: 40,
+    min: 4,
+    max: 22,
   },
 
   // Country count configuration

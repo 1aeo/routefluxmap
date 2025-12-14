@@ -10,6 +10,8 @@ interface SettingsPanelProps {
   setOpacity: (val: number) => void;
   speed: number;
   setSpeed: (val: number) => void;
+  relaySize: number;
+  setRelaySize: (val: number) => void;
 }
 
 export default function SettingsPanel({
@@ -24,11 +26,33 @@ export default function SettingsPanel({
   setOpacity,
   speed,
   setSpeed,
+  relaySize,
+  setRelaySize,
 }: SettingsPanelProps) {
   if (!show) return null;
 
   return (
     <div className="absolute bottom-0 left-10 ml-2 bg-black/80 backdrop-blur-md rounded-lg p-3 border border-tor-green/20 w-48 shadow-lg animate-fade-in z-20">
+      
+      {/* RELAY SETTINGS Header */}
+      <h3 className="text-tor-green text-xs font-bold mb-3 uppercase tracking-wider">Relay Settings</h3>
+      
+      {/* Relay Size Slider */}
+      <div className="mb-4 pb-3 border-b border-white/10">
+        <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+          <span>Node Circle Size</span>
+          <span>{(relaySize * 100).toFixed(0)}%</span>
+        </div>
+        <input
+          type="range"
+          min="0.01"
+          max="1.0"
+          step="0.01"
+          value={relaySize}
+          onChange={(e) => setRelaySize(parseFloat(e.target.value))}
+          className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+        />
+      </div>
       
       {/* TRAFFIC SETTINGS Header */}
       <h3 className="text-tor-green text-xs font-bold mb-3 uppercase tracking-wider">Traffic Settings</h3>
