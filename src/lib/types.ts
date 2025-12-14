@@ -18,14 +18,17 @@ export interface AggregatedNode {
   lng: number;
   x: number;                   // Normalized [0,1] for WebGL
   y: number;                   // Normalized [0,1] for WebGL
-  bandwidth: number;
-  normalized_bandwidth: number; // For probabilistic particle distribution
+  bandwidth: number;           // Raw bandwidth for this location
+  selectionWeight: number;     // Normalized weight for particle distribution (bandwidth/total)
   label: string;               // Summary: "RelayName" or "N relays at location"
   relays: RelayInfo[];         // Individual relays for popup
   
   // Pre-computed properties for efficient rendering
   type: 'exit' | 'guard' | 'middle';
   isHSDir: boolean;
+  
+  // Backward compatibility: old data may have normalized_bandwidth instead of selectionWeight
+  normalized_bandwidth?: number;
 }
 
 // Date index from storage

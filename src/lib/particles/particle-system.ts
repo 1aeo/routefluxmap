@@ -130,7 +130,8 @@ export class ParticleSystem {
   private buildCumulativeProbs(): void {
     let sum = 0;
     this.cumulativeProbs = this.nodes.map(n => {
-      sum += n.normalized_bandwidth;
+      // Backward compat: support both new selectionWeight and old normalized_bandwidth
+      sum += n.selectionWeight ?? n.normalized_bandwidth ?? 0;
       return sum;
     });
   }

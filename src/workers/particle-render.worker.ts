@@ -20,7 +20,7 @@ interface ViewState {
 interface WorkerMessage {
   type: 'init' | 'updateNodes' | 'updateViewState' | 'resize' | 'updateSettings';
   canvas?: OffscreenCanvas;
-  nodes?: { lng: number; lat: number; isHSDir: boolean; normalized_bandwidth?: number }[];
+  nodes?: { lng: number; lat: number; isHSDir: boolean; selectionWeight?: number }[];
   viewState?: ViewState;
   width?: number;
   height?: number;
@@ -528,7 +528,7 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
     rawNodes = msg.nodes.map(n => ({
       lng: n.lng, lat: n.lat,
       isHSDir: !!n.isHSDir,
-      bandwidth: n.normalized_bandwidth ?? 0
+      bandwidth: n.selectionWeight ?? 0
     }));
     processNodes();
   }

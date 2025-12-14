@@ -8,14 +8,16 @@ import { config, getRelayMetricsUrl } from '../../lib/config';
 interface RelayPopupProps {
   node: AggregatedNode;
   countryName?: string | null;
+  totalBandwidth: number;
   x: number;
   y: number;
   onClose: () => void;
 }
 
-// Format bandwidth percentage
-function formatBandwidth(normalized: number): string {
-  const pct = normalized * 100;
+// Format bandwidth as percentage of network
+function formatNetworkShare(nodeBandwidth: number, totalBandwidth: number): string {
+  if (totalBandwidth <= 0) return '0%';
+  const pct = (nodeBandwidth / totalBandwidth) * 100;
   if (pct >= 1) return `${pct.toFixed(1)}%`;
   if (pct >= 0.1) return `${pct.toFixed(2)}%`;
   return `${pct.toFixed(3)}%`;
@@ -46,7 +48,7 @@ function isHSDir(flags: string): boolean {
   return flags.includes('H');
 }
 
-export default function RelayPopup({ node, countryName, x, y, onClose }: RelayPopupProps) {
+export default function RelayPopup({ node, countryName, totalBandwidth, x, y, onClose }: RelayPopupProps) {
   // Calculate position to keep popup in viewport
   const left = Math.min(x + 15, window.innerWidth - 380);
   const top = Math.min(y + 15, window.innerHeight - 400);
@@ -72,7 +74,7 @@ export default function RelayPopup({ node, countryName, x, y, onClose }: RelayPo
             {countryName && <span className="text-gray-500"> — {countryName}</span>}
           </p>
           <p className="text-gray-500 text-xs">
-            {formatBandwidth(node.normalized_bandwidth)} of network
+            {formatNetworkShare(node.bandwidth, totalBandwidth)} of network
           </p>
         </div>
         <button

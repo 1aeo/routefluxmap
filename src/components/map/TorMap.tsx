@@ -891,6 +891,7 @@ export default function TorMap() {
         <RelayPopup
           node={selectedNode}
           countryName={selectedCountryName}
+          totalBandwidth={relayData?.bandwidth ?? 0}
           x={popupPosition.x}
           y={popupPosition.y}
           onClose={handleClosePopup}

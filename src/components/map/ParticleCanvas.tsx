@@ -68,7 +68,8 @@ export default function ParticleCanvas({
       nodes: nodes.map(n => ({ 
         lng: n.lng, 
         lat: n.lat, 
-        normalized_bandwidth: n.normalized_bandwidth,
+        // Backward compat: support both new selectionWeight and old normalized_bandwidth
+        selectionWeight: n.selectionWeight ?? n.normalized_bandwidth ?? 0,
         // Use pre-calculated flag if available, otherwise fallback to iteration (for old data compatibility)
         isHSDir: n.isHSDir ?? n.relays.some(r => r.flags.includes('H'))
       }))

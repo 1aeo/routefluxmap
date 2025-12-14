@@ -109,7 +109,7 @@ interface AggregatedNode {
   x: number;
   y: number;
   bandwidth: number;
-  normalized_bandwidth: number;
+  selectionWeight: number;
   label: string;
   relays: RelayInfo[];
 }
@@ -1638,7 +1638,7 @@ function buildProcessedData(
       x: pos.x,
       y: pos.y,
       bandwidth,
-      normalized_bandwidth: totalBandwidth > 0 ? bandwidth / totalBandwidth : 0,
+      selectionWeight: totalBandwidth > 0 ? bandwidth / totalBandwidth : 0,
       label,
       relays: bucket.relays,
       type,
