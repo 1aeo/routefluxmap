@@ -96,7 +96,6 @@ export interface LayerSettings {
   particleCount: number;
   particleSize: number;
   particleSpeed: number;
-  particleOffset: number;
   nodeCount: number;
   countryCount: number;
   scaleByBandwidth: boolean;

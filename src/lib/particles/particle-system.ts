@@ -59,7 +59,6 @@ export class ParticleSystem {
     particleCount: number,
     options: {
       hiddenServiceProbability?: number;
-      offsetFactor?: number;
       baseSpeed?: number;
     } = {}
   ): void {

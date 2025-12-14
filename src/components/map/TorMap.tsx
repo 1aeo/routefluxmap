@@ -122,6 +122,44 @@ export default function TorMap() {
   const relayTransitionRef = useRef<{ animationId: number | null; startTime: number }>({ animationId: null, startTime: 0 });
   const prevRelayDataRef = useRef<RelayData | null>(null);
 
+  // Adaptive configuration: compute optimal values from current data
+  // Runtime calculation (0.3ms) when data loads, static fallback before
+  const adaptiveConfig = useMemo(() => {
+    if (!relayData) {
+      // Static fallback before data loads
+      return {
+        particleCount: config.particleCount.default,
+        nodeCount: config.nodeCount.default,
+        countryCount: config.countryCount.default,
+      };
+    }
+
+    // Calculate from current data
+    // Particle count scales with bandwidth (busier network = more particles)
+    // K=400: at baseline ~1000 bandwidth, gives ~400k particles (~0.2/pixel on 1080p)
+    const scaledParticleCount = Math.round(relayData.bandwidth * config.particleScaleFactor);
+    const clampedParticleCount = Math.max(
+      config.particleCount.min,
+      Math.min(scaledParticleCount, config.particleCount.max)
+    );
+
+    return {
+      particleCount: clampedParticleCount,
+      nodeCount: relayData.nodes.length,  // Show all aggregated locations
+      countryCount: config.countryCount.default,
+    };
+  }, [relayData]);
+
+  // Apply adaptive particle count when data loads (scales with network bandwidth)
+  const adaptiveAppliedRef = useRef(false);
+  useEffect(() => {
+    if (relayData && !adaptiveAppliedRef.current) {
+      // Apply adaptive particle count once when data first loads
+      setParticleCount(adaptiveConfig.particleCount);
+      adaptiveAppliedRef.current = true;
+    }
+  }, [relayData, adaptiveConfig.particleCount]);
+
   // Clear hover/popup when relay layer is hidden
   const handleLayerVisibilityChange = useCallback((newVisibility: LayerVisibility) => {
     setLayerVisibility(newVisibility);

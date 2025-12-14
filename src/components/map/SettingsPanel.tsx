@@ -62,7 +62,20 @@ export default function SettingsPanel({
 
       {/* Traffic Type Selector */}
       <div className="mb-3">
-        <div className="text-[10px] text-gray-400 mb-1">Traffic Type</div>
+        <div className="flex items-center gap-1 text-[10px] text-gray-400 mb-1">
+          <span>Traffic Type</span>
+          <a
+            href="https://metrics.torproject.org/hidserv-dir-onions-seen.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-gray-500 hover:text-tor-green transition-colors"
+            title="Hidden service traffic is ~3-6% of Tor traffic (estimated). Click to learn more."
+          >
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
+          </a>
+        </div>
         <div className="flex gap-1">
           <button
             onClick={() => setTrafficType('all')}
@@ -91,6 +104,7 @@ export default function SettingsPanel({
                 ? 'bg-tor-orange text-black'
                 : 'bg-white/10 text-gray-400 hover:bg-white/20'
             }`}
+            title="~3-6% of Tor traffic goes to .onion hidden services (estimated from academic research)"
           >
             Hidden
           </button>

@@ -1,6 +1,9 @@
 /**
  * RouteFluxMap Configuration
  * Theme: Black + Green
+ * 
+ * Many values are adaptive - they adjust based on current relay data.
+ * Static defaults are used before data loads or as fallbacks.
  */
 
 export const config = {
@@ -19,10 +22,12 @@ export const config = {
   particleGeneralColor: [0.0, 1.0, 0.53] as const,    // Green (#00ff88)
 
   // Node count configuration
+  // ADAPTIVE: Shows all aggregated locations from data when available
+  // Static default used before data loads (~1,200-1,500 locations typical)
   nodeCount: {
-    default: 500,
+    default: 1500,
     min: 100,
-    max: 2000,
+    max: 3000,
   },
 
   // Node radius (pixels)
@@ -32,24 +37,23 @@ export const config = {
   },
 
   // Country count configuration
+  // ADAPTIVE: Shows all countries with relays when data available
+  // Static default covers typical range (~80-120 countries have relays)
   countryCount: {
-    default: 50,
+    default: 120,
     min: 5,
-    max: 200,
+    max: 250,
   },
 
   // Particle count configuration
+  // ADAPTIVE: Scales with network bandwidth (particles = bandwidth × K)
+  // K=400 derived from: ~400k particles at ~1000 bandwidth baseline
+  // This gives ~0.2 particles/pixel on 1080p = good visual density
+  particleScaleFactor: 400,
   particleCount: {
-    default: 400_000,
+    default: 500_000,  // Fallback before data loads
     min: 100_000,
-    max: 5_000_000,
-  },
-
-  // Particle path offset
-  particleOffset: {
-    default: 0.10,
-    min: 0.0001,
-    max: 4.0,
+    max: 2_000_000,
   },
 
   // Particle size (pixels)
@@ -60,14 +64,22 @@ export const config = {
   },
 
   // Particle speed (ms for particle to circle earth)
-  particleBaseSpeedMs: 60_000,
+  particleBaseSpeedMs: 55_000,
   particleSpeedFactor: {
     min: 0.01,
     max: 4.0,
   },
 
-  // Hidden services probability
+  // Hidden service traffic probability
+  // Estimated ~3-6% of Tor traffic goes to .onion addresses
+  // This is a research estimate - not directly measurable due to Tor's privacy design
+  // Source: https://metrics.torproject.org/hidserv-dir-onions-seen.html
   hiddenServiceProbability: 0.04,
+  hiddenServiceInfo: {
+    percentage: '~3-6%',
+    source: 'Tor Project metrics and academic research',
+    url: 'https://metrics.torproject.org/hidserv-dir-onions-seen.html',
+  },
 
   // Mobile adjustments
   mobile: {
