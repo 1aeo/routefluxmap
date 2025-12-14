@@ -41,4 +41,3 @@ export function calculateNodeRadius(node: AggregatedNode): number {
 
   return config.nodeRadius.min + RADIUS_RANGE * normalized;
 }
-

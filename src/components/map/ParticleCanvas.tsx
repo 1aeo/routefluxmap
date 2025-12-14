@@ -15,6 +15,7 @@ interface ParticleCanvasProps {
   speed?: number;
   trafficType?: 'all' | 'hidden' | 'general';
   pathMode?: 'city' | 'country';
+  onVisibleNodesChange?: (indices: number[]) => void;
 }
 
 export default function ParticleCanvas({
@@ -27,10 +28,15 @@ export default function ParticleCanvas({
   opacity = 1.0,
   speed = 1.0,
   trafficType = 'all',
-  pathMode = 'city'
+  pathMode = 'city',
+  onVisibleNodesChange
 }: ParticleCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const workerRef = useRef<Worker | null>(null);
+
+  // Store callback in ref to avoid re-creating listener
+  const onVisibleNodesChangeRef = useRef(onVisibleNodesChange);
+  onVisibleNodesChangeRef.current = onVisibleNodesChange;
 
   // Initialize Worker
   useEffect(() => {
@@ -41,6 +47,13 @@ export default function ParticleCanvas({
       type: 'module'
     });
     workerRef.current = worker;
+
+    // Listen for messages from worker
+    worker.onmessage = (e) => {
+      if (e.data.type === 'visibleNodes' && onVisibleNodesChangeRef.current) {
+        onVisibleNodesChangeRef.current(e.data.indices);
+      }
+    };
 
     // Transfer control
     const offscreen = canvasRef.current.transferControlToOffscreen();

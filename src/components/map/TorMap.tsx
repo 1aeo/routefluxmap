@@ -105,6 +105,9 @@ export default function TorMap() {
   const [lineOpacityFactor, setLineOpacityFactor] = useState(0.5);
   const [lineSpeedFactor, setLineSpeedFactor] = useState(0.5);
   const [relaySizeScale, setRelaySizeScale] = useState(0.5); // 0.5 = 50% slider = 1x size (current)
+  const [filterRelaysByTraffic, setFilterRelaysByTraffic] = useState(false); // Filter relays to match traffic routes
+  const [visibleNodeIndices, setVisibleNodeIndices] = useState<Set<number>>(new Set()); // Indices from particle worker
+  const [indicesDataVersion, setIndicesDataVersion] = useState<string | null>(null); // Track which data version indices belong to
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0); // 1x playback speed for date animation
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
@@ -152,6 +155,10 @@ export default function TorMap() {
       if (countryTooltipRef.current) {
         countryTooltipRef.current.style.opacity = '0';
       }
+    }
+    // Reset relay filter when particles are disabled
+    if (!newVisibility.particles) {
+      setFilterRelaysByTraffic(false);
     }
   }, []);
   
@@ -700,6 +707,70 @@ export default function TorMap() {
     };
   }, [relayData]);
 
+  // Receive visible node indices from particle worker
+  const dataVersion = relayData?.published ?? null;
+  const handleVisibleNodesChange = useCallback((indices: number[]) => {
+    setVisibleNodeIndices(new Set(indices));
+    setIndicesDataVersion(dataVersion);
+  }, [dataVersion]);
+
+  // Aggregate nodes by country (for country path mode), tracking which indices map to each country
+  const countryAggregation = useMemo(() => {
+    if (pathMode !== 'country' || !relayData?.nodes?.length) return null;
+    
+    const groups: Record<string, { relays: typeof relayData.nodes[0]['relays'], bandwidth: number, nodeIndices: number[] }> = {};
+    const entries = Object.entries(countryCentroids);
+    
+    for (let i = 0; i < relayData.nodes.length; i++) {
+      const { lng, lat, relays, bandwidth } = relayData.nodes[i];
+      let minDist = Infinity, nearest = '';
+      for (const [code, [cLng, cLat]] of entries) {
+        const dist = (lng - cLng) ** 2 + (lat - cLat) ** 2;
+        if (dist < minDist) { minDist = dist; nearest = code; }
+      }
+      if (!nearest) continue;
+      const g = groups[nearest] ||= { relays: [], bandwidth: 0, nodeIndices: [] };
+      g.relays.push(...relays);
+      g.bandwidth += bandwidth;
+      g.nodeIndices.push(i);
+    }
+    
+    const nodes: AggregatedNode[] = [];
+    const countryIndices: number[][] = [];
+    const totalBw = relayData.bandwidth || 1;
+    for (const [code, g] of Object.entries(groups)) {
+      const c = countryCentroids[code];
+      if (!c) continue;
+      nodes.push({
+        lng: c[0], lat: c[1], x: 0, y: 0,
+        bandwidth: g.bandwidth,
+        selectionWeight: g.bandwidth / totalBw,
+        label: `${g.relays.length} relays in ${code}`,
+        relays: g.relays,
+      });
+      countryIndices.push(g.nodeIndices);
+    }
+    return { nodes, countryIndices };
+  }, [pathMode, relayData]);
+
+  // Filter/aggregate nodes based on path mode and traffic filter
+  const filteredNodes = useMemo(() => {
+    if (!relayData?.nodes?.length) return [];
+    
+    const indicesValid = visibleNodeIndices.size > 0 && indicesDataVersion === dataVersion;
+    
+    if (pathMode === 'country' && countryAggregation) {
+      if (!filterRelaysByTraffic) return countryAggregation.nodes;
+      if (!indicesValid) return [];
+      return countryAggregation.nodes.filter((_, i) =>
+        countryAggregation.countryIndices[i].some(idx => visibleNodeIndices.has(idx))
+      );
+    }
+    
+    if (!filterRelaysByTraffic) return relayData.nodes;
+    if (!indicesValid) return [];
+    return relayData.nodes.filter((_, i) => visibleNodeIndices.has(i));
+  }, [relayData, dataVersion, pathMode, countryAggregation, filterRelaysByTraffic, visibleNodeIndices, indicesDataVersion]);
 
   // Create Deck.gl layers (relay markers + country choropleth)
   const baseLayers = useMemo(() => {
@@ -721,12 +792,11 @@ export default function TorMap() {
     }
     
     // Relay layer (only if we have actual nodes)
-    const hasNodes = relayData && relayData.nodes && relayData.nodes.length > 0;
-    if (hasNodes && layerVisibility.relays) {
+    if (filteredNodes.length > 0 && layerVisibility.relays) {
       result.push(
         new ScatterplotLayer({
           id: 'relays',
-          data: relayData.nodes,
+          data: filteredNodes,
           pickable: true,
           opacity: 0.85 * relayOpacity, // Apply transition opacity
           stroked: true,
@@ -756,8 +826,8 @@ export default function TorMap() {
           onClick: handleClick,
           onHover: handleHover,
           updateTriggers: {
-            getFillColor: [relayData],
-            getRadius: [relayData, relaySizeScale],
+            getFillColor: [filteredNodes],
+            getRadius: [filteredNodes, relaySizeScale],
             opacity: [relayOpacity],
             getLineColor: [relayOpacity],
           },
@@ -766,7 +836,7 @@ export default function TorMap() {
     }
     
     return result;
-  }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, relayOpacity, relaySizeScale]);
+  }, [filteredNodes, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, relayOpacity, relaySizeScale]);
 
   const layers = baseLayers;
 
@@ -839,6 +909,7 @@ export default function TorMap() {
         speed={lineSpeedFactor}
         trafficType={trafficType}
         pathMode={pathMode}
+        onVisibleNodesChange={handleVisibleNodesChange}
       />
 
       {/* Attribution - only show after loaded */}
@@ -1091,6 +1162,9 @@ export default function TorMap() {
           setSpeed={setLineSpeedFactor}
           relaySize={relaySizeScale}
           setRelaySize={setRelaySizeScale}
+          filterRelaysByTraffic={filterRelaysByTraffic}
+          setFilterRelaysByTraffic={setFilterRelaysByTraffic}
+          trafficEnabled={layerVisibility.particles}
         />
 
         {/* Zoom buttons */}

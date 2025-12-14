@@ -12,6 +12,9 @@ interface SettingsPanelProps {
   setSpeed: (val: number) => void;
   relaySize: number;
   setRelaySize: (val: number) => void;
+  filterRelaysByTraffic: boolean;
+  setFilterRelaysByTraffic: (val: boolean) => void;
+  trafficEnabled: boolean;
 }
 
 export default function SettingsPanel({
@@ -28,6 +31,9 @@ export default function SettingsPanel({
   setSpeed,
   relaySize,
   setRelaySize,
+  filterRelaysByTraffic,
+  setFilterRelaysByTraffic,
+  trafficEnabled,
 }: SettingsPanelProps) {
   if (!show) return null;
 
@@ -38,7 +44,7 @@ export default function SettingsPanel({
       <h3 className="text-tor-green text-xs font-bold mb-3 uppercase tracking-wider">Relay Settings</h3>
       
       {/* Relay Size Slider */}
-      <div className="mb-4 pb-3 border-b border-white/10">
+      <div className="mb-3">
         <div className="flex justify-between text-[10px] text-gray-400 mb-1">
           <span>Node Circle Size</span>
           <span>{(relaySize * 100).toFixed(0)}%</span>
@@ -52,6 +58,43 @@ export default function SettingsPanel({
           onChange={(e) => setRelaySize(parseFloat(e.target.value))}
           className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-400"
         />
+      </div>
+      
+      {/* Display Relays Toggle */}
+      <div className="mb-4 pb-3 border-b border-white/10">
+        <div className="flex items-center gap-1 text-[10px] text-gray-400 mb-1">
+          <span>Display Relays</span>
+          <span
+            className="text-gray-500 hover:text-tor-green transition-colors cursor-help"
+            title="When traffic flows enabled, 'Traffic Only' shows only relays in those flows"
+          >
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
+          </span>
+        </div>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setFilterRelaysByTraffic(false)}
+            className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+              !filterRelaysByTraffic ? 'bg-cyan-400 text-black' : 'bg-white/10 text-gray-400 hover:bg-white/20'
+            }`}
+          >
+            All
+          </button>
+          <button
+            onClick={() => setFilterRelaysByTraffic(true)}
+            disabled={!trafficEnabled}
+            className={`flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+              filterRelaysByTraffic
+                ? 'bg-cyan-400 text-black'
+                : trafficEnabled ? 'bg-white/10 text-gray-400 hover:bg-white/20' : 'bg-white/5 text-gray-600 cursor-not-allowed'
+            }`}
+            title={trafficEnabled ? '' : 'Enable traffic flows first'}
+          >
+            Traffic Only
+          </button>
+        </div>
       </div>
       
       {/* TRAFFIC SETTINGS Header */}

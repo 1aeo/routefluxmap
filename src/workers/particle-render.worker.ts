@@ -39,6 +39,8 @@ interface Route {
   startY: number;
   endX: number;
   endY: number;
+  srcIdx: number;  // Index into nodes array
+  tgtIdx: number;  // Index into nodes array
   isHidden: boolean;
   bandwidthScore: number;
   bandwidthRank: number; // 0 = top, 1 = lowest
@@ -95,6 +97,9 @@ let countryCentroids: Record<string, [number, number]> = {};
 
 // Raw nodes before aggregation (for switching modes without re-fetching)
 let rawNodes: { lng: number; lat: number; isHSDir: boolean; bandwidth: number }[] = [];
+
+// Maps aggregated node index to original rawNodes indices (country mode only, null in city mode)
+let aggregatedToRawIndices: number[][] | null = null;
 
 // --- Shaders ---
 const LINE_VS = `#version 300 es
@@ -189,37 +194,35 @@ function findNearestCountry(lng: number, lat: number): string | null {
 
 // Aggregate nodes by country centroid
 function aggregateNodesByCountry(): typeof nodes {
-  if (!Object.keys(countryCentroids).length) return rawNodes.map(n => {
-    const [x, y] = projectToWorld(n.lng, n.lat);
-    return { x, y, isHSDir: n.isHSDir, bandwidth: n.bandwidth };
-  });
+  if (!Object.keys(countryCentroids).length) {
+    aggregatedToRawIndices = null;
+    return rawNodes.map(n => {
+      const [x, y] = projectToWorld(n.lng, n.lat);
+      return { x, y, isHSDir: n.isHSDir, bandwidth: n.bandwidth };
+    });
+  }
 
-  // Group nodes by nearest country
-  const countryGroups: Record<string, { bandwidth: number; isHSDir: boolean; count: number }> = {};
-  
-  for (const n of rawNodes) {
+  // Group nodes by nearest country, tracking original indices
+  const groups: Record<string, { bandwidth: number; isHSDir: boolean; rawIndices: number[] }> = {};
+  for (let i = 0; i < rawNodes.length; i++) {
+    const n = rawNodes[i];
     const code = findNearestCountry(n.lng, n.lat);
     if (!code) continue;
-    
-    if (!countryGroups[code]) {
-      countryGroups[code] = { bandwidth: 0, isHSDir: false, count: 0 };
-    }
-    countryGroups[code].bandwidth += n.bandwidth;
-    countryGroups[code].isHSDir = countryGroups[code].isHSDir || n.isHSDir;
-    countryGroups[code].count++;
+    const g = groups[code] ||= { bandwidth: 0, isHSDir: false, rawIndices: [] };
+    g.bandwidth += n.bandwidth;
+    g.isHSDir ||= n.isHSDir;
+    g.rawIndices.push(i);
   }
 
   // Convert to node array using country centroids
   const aggregated: typeof nodes = [];
-  for (const [code, group] of Object.entries(countryGroups)) {
-    const centroid = countryCentroids[code];
-    if (!centroid) continue;
-    const [x, y] = projectToWorld(centroid[0], centroid[1]);
-    aggregated.push({
-      x, y,
-      isHSDir: group.isHSDir,
-      bandwidth: group.bandwidth / group.count // Average bandwidth per relay
-    });
+  aggregatedToRawIndices = [];
+  for (const [code, g] of Object.entries(groups)) {
+    const c = countryCentroids[code];
+    if (!c) continue;
+    const [x, y] = projectToWorld(c[0], c[1]);
+    aggregated.push({ x, y, isHSDir: g.isHSDir, bandwidth: g.bandwidth / g.rawIndices.length });
+    aggregatedToRawIndices.push(g.rawIndices);
   }
   
   console.log(`[ParticleWorker] Aggregated ${rawNodes.length} nodes into ${aggregated.length} countries`);
@@ -347,6 +350,7 @@ function generateAllRoutes() {
 
     allRoutes.push({
       startX: src.x, startY: src.y, endX, endY: tgt.y,
+      srcIdx, tgtIdx,
       isHidden, bandwidthScore: src.bandwidth * tgt.bandwidth, bandwidthRank: 0
     });
   }
@@ -357,8 +361,27 @@ function generateAllRoutes() {
 }
 
 function filterRoutesByDensity() {
-  if (!allRoutes.length) return;
+  if (!allRoutes.length) {
+    self.postMessage({ type: 'visibleNodes', indices: [] });
+    return;
+  }
   routes = allRoutes.slice(0, Math.max(1, (allRoutes.length * currentDensity) | 0));
+  
+  // Collect unique node indices and send to main thread
+  const seen = new Set<number>();
+  const mapping = aggregatedToRawIndices; // null in city mode
+  for (const r of routes) {
+    if (mapping) {
+      // Country mode: expand to original indices
+      for (const idx of mapping[r.srcIdx]) seen.add(idx);
+      for (const idx of mapping[r.tgtIdx]) seen.add(idx);
+    } else {
+      // City mode: direct indices
+      seen.add(r.srcIdx);
+      seen.add(r.tgtIdx);
+    }
+  }
+  self.postMessage({ type: 'visibleNodes', indices: [...seen] });
 }
 
 // --- Buffer Init ---
@@ -506,6 +529,8 @@ function processNodes() {
   if (currentPathMode === 'country') {
     nodes = aggregateNodesByCountry();
   } else {
+    // City mode: no mapping needed, indices match directly
+    aggregatedToRawIndices = null;
     nodes = rawNodes.map(n => {
       const [x, y] = projectToWorld(n.lng, n.lat);
       return { x, y, isHSDir: n.isHSDir, bandwidth: n.bandwidth };
