@@ -75,11 +75,6 @@ export const config = {
   // This is a research estimate - not directly measurable due to Tor's privacy design
   // Source: https://metrics.torproject.org/hidserv-dir-onions-seen.html
   hiddenServiceProbability: 0.04,
-  hiddenServiceInfo: {
-    percentage: '~3-6%',
-    source: 'Tor Project metrics and academic research',
-    url: 'https://metrics.torproject.org/hidserv-dir-onions-seen.html',
-  },
 
   // Mobile adjustments
   mobile: {

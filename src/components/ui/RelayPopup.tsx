@@ -23,24 +23,18 @@ function formatNetworkShare(nodeBandwidth: number, totalBandwidth: number): stri
   return `${pct.toFixed(3)}%`;
 }
 
+// Pre-computed relay type colors (avoid string building on every render)
+const RELAY_TYPES = {
+  exit: { name: 'Exit', color: `rgb(${config.relayColors.exit.slice(0, 3).join(',')})` },
+  guard: { name: 'Guard', color: `rgb(${config.relayColors.guard.slice(0, 3).join(',')})` },
+  middle: { name: 'Middle', color: `rgb(${config.relayColors.middle.slice(0, 3).join(',')})` },
+} as const;
+
 // Get relay type based on flags
-function getRelayType(flags: string): { name: string; color: string } {
-  if (flags.includes('E')) {
-    return { 
-      name: 'Exit', 
-      color: `rgb(${config.relayColors.exit.slice(0, 3).join(',')})` 
-    };
-  }
-  if (flags.includes('G')) {
-    return { 
-      name: 'Guard', 
-      color: `rgb(${config.relayColors.guard.slice(0, 3).join(',')})` 
-    };
-  }
-  return { 
-    name: 'Middle', 
-    color: `rgb(${config.relayColors.middle.slice(0, 3).join(',')})` 
-  };
+function getRelayType(flags: string) {
+  if (flags.includes('E')) return RELAY_TYPES.exit;
+  if (flags.includes('G')) return RELAY_TYPES.guard;
+  return RELAY_TYPES.middle;
 }
 
 // Check if relay is an HSDir
