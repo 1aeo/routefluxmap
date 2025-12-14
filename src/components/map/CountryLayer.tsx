@@ -1,6 +1,8 @@
 /**
  * CountryLayer - GeoJSON choropleth showing Tor client connections by country
- * Uses Deck.gl GeoJsonLayer for rendering country polygons
+ * 
+ * Performance: Uses CPU point-in-polygon for hover detection instead of GPU picking.
+ * This avoids expensive readPixels() calls that block the render loop.
  */
 
 import { GeoJsonLayer } from '@deck.gl/layers';
@@ -12,13 +14,13 @@ interface CountryLayerOptions {
   geojson: GeoJSON.FeatureCollection | null;
   visible: boolean;
   opacity?: number;
-  // Note: onClick and onHover removed - using JS point-in-polygon instead (TorFlow approach)
+  // Note: onClick and onHover removed - using CPU point-in-polygon instead
   // This eliminates expensive GPU readPixels() on every mouse move
 }
 
-// Color scale from dark to bright green
+// Color ramp: dark blue-gray (#1a1a2e) → bright green (#00ff88)
 function getCountryColor(normalizedValue: number): [number, number, number, number] {
-  // From dark purple/blue to bright green
+  // Linear interpolation with alpha scaling for depth perception
   const r = Math.round(26 + (0 - 26) * normalizedValue);
   const g = Math.round(26 + (255 - 26) * normalizedValue);
   const b = Math.round(46 + (136 - 46) * normalizedValue);
@@ -33,6 +35,10 @@ function getCountryCode(feature: any): string | null {
   return props?.iso_a2 || props?.ISO_A2 || props?.cc2 || null;
 }
 
+/**
+ * Creates a Deck.gl GeoJsonLayer for country choropleth visualization.
+ * Layer is always created (even when hidden) to keep geometry in GPU memory.
+ */
 export function createCountryLayer({
   countryData,
   geojson,
@@ -51,7 +57,7 @@ export function createCountryLayer({
     id: 'countries',
     data: geojson,
     visible,
-    // TorFlow approach: Disable GPU picking entirely - use JS point-in-polygon instead
+    // Disable GPU picking entirely - use CPU point-in-polygon instead
     // This eliminates expensive readPixels() GPU readback on every mouse move
     pickable: false,
     stroked: true,

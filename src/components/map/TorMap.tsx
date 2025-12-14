@@ -31,7 +31,6 @@ import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
-import LoadingBar from '../ui/LoadingBar';
 import StartupOverlay from '../ui/StartupOverlay';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import ParticleCanvas from './ParticleCanvas';
@@ -182,10 +181,10 @@ export default function TorMap() {
     return viewport ? viewport.unproject([x, y]) : null;
   }, []);
 
-  // NOTE: DOM event throttling removed.
-  // With Worker particles + Optimized Tooltips (no-mount), the performance impact 
-  // of 60fps picking is negligible, and throttling caused "stuck" tooltips 
-  // because the "exit" events were being dropped.
+  // PERF: Event throttling intentionally disabled here.
+  // The particle system runs in a Web Worker (OffscreenCanvas), so main-thread
+  // mouse events don't compete with rendering. Throttling caused "stuck" tooltips
+  // by dropping mouseout events.
 
   // Debounced URL updater for map location (300ms delay to avoid spamming during pan/zoom)
   // Also clears CC (country code) since user is manually navigating away from that country
@@ -294,7 +293,9 @@ export default function TorMap() {
           // Normalize country codes in chunks to avoid blocking the main thread
           // This prevents requestAnimationFrame violations during loading
           if (geojson.features) {
-            // Territory mappings for regions with "-99" or missing ISO codes
+            // --- Territory Code Normalization ---
+            // GeoJSON files use inconsistent ISO codes. Map common territory names
+            // to their ISO 3166-1 alpha-2 codes for reliable choropleth matching.
             const territoryMap: Record<string, string> = {
               'france': 'FR',
               'norway': 'NO',
@@ -347,7 +348,9 @@ export default function TorMap() {
               }
             };
             
-            // Process features in chunks to avoid blocking animation frames
+            // Process GeoJSON features in small chunks to avoid blocking the main thread.
+            // Without chunking, 200+ country features can trigger "requestAnimationFrame exceeded"
+            // warnings during initial load.
             const CHUNK_SIZE = 50;
             const features = geojson.features;
             let index = 0;
@@ -532,9 +535,9 @@ export default function TorMap() {
     return false;
   }, [countryGeojson]);
 
-  // Handle hover - throttled to reduce picking overhead during particle animation
-  // Deck.gl's picking causes GPU readback on every mouse move, which blocks animation
-  // Optimized: Using refs to update DOM directly instead of React state for smoother tooltips
+  // Relay hover handler with two optimizations:
+  // 1. Only trigger React re-render when the hovered NODE changes (not just position)
+  // 2. Update tooltip position via DOM ref directly (no setState) for 60fps smoothness
   const tooltipRef = useRef<HTMLDivElement>(null);
   const countryTooltipRef = useRef<HTMLDivElement>(null);
   
@@ -600,7 +603,7 @@ export default function TorMap() {
     }
   }, [countryData]);
 
-  // TorFlow approach: JavaScript point-in-polygon for country hover (no GPU picking)
+  // Use CPU point-in-polygon for country hover (no GPU picking)
   // This completely eliminates the expensive readPixels() GPU readback
   const handleCountryMouseMove = useCallback((event: React.MouseEvent) => {
     if (!layerVisibility.countries || !countryGeojson) {
@@ -699,23 +702,7 @@ export default function TorMap() {
     ...getZoomPixelConstraints(viewState.zoom),
   }), [viewState.zoom]);
 
-  // OLD: Particle layer - smaller dots with opacity (only if we have relay nodes)
-  /*
-  const { layers: particleLayers, progress: particleProgress, isGenerating: isGeneratingParticles } = useParticleLayer({
-    nodes: relayData?.nodes ?? [],
-    visible: layerVisibility.particles && hasRelayNodes,
-    particleCount,
-    particleSize: 1, // Smaller particles
-    speedFactor: lineSpeedFactor,
-    offsetFactor: config.particleOffset.default,
-    hiddenServiceProbability: config.hiddenServiceProbability,
-    trafficType,
-    lineDensityFactor,
-    lineOpacityFactor,
-  });
-  */
-
-  // Create static layers (without particles to avoid re-render loops)
+  // Create Deck.gl layers (relay markers + country choropleth)
   const baseLayers = useMemo(() => {
     const result: any[] = [];
     
@@ -727,7 +714,7 @@ export default function TorMap() {
       geojson: countryGeojson,
       visible: layerVisibility.countries,
       opacity: 0.5,
-      // Note: Country hover/click handled via JS point-in-polygon (TorFlow approach)
+      // Note: Country hover/click handled via CPU point-in-polygon
       // This eliminates expensive GPU readPixels() on every mouse move
     });
     if (countryLayer) {
@@ -782,23 +769,7 @@ export default function TorMap() {
     return result;
   }, [relayData, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, relayOpacity, maxRelayCount, maxBandwidth, zoomScale, baseMinPixels, baseMaxPixels]);
 
-  // Combine base layers with particle layer (particle layer updates independently)
-  // const layers = particleLayers ? [...baseLayers, ...particleLayers] : baseLayers;
   const layers = baseLayers;
-
-  /*
-  // Initial Loading state (only shown on first load)
-  if (initialLoading && !relayData) {
-    return (
-      <div className="flex items-center justify-center h-full bg-tor-darker">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-tor-green mx-auto mb-4"></div>
-          <p className="text-gray-400">Loading relay data...</p>
-        </div>
-      </div>
-    );
-  }
-  */
 
   // Error state (only shown if no data at all)
   if (error && !relayData) {
@@ -826,7 +797,7 @@ export default function TorMap() {
       />
 
       {/* Interactive Map - Active layer */}
-      {/* Wrapper div for country hover/click detection via JS point-in-polygon (TorFlow approach) */}
+      {/* Wrapper div for country hover/click detection via CPU point-in-polygon */}
       <div 
         onMouseMove={handleCountryMouseMove}
         onClick={layerVisibility.countries ? handleCountryClick : undefined}
@@ -839,7 +810,7 @@ export default function TorMap() {
           controller={true}
           layers={layers}
           onClick={handleDeckClick} // Handle background clicks
-          // Use our throttled hover state for cursor instead of Deck.gl's internal picking
+          // Custom cursor: pointer when hovering relays or countries, grab otherwise
           getCursor={() => hoverInfo || lastCountryCodeRef.current ? 'pointer' : 'grab'}
           style={{ position: 'relative' }}
         >
@@ -853,7 +824,11 @@ export default function TorMap() {
         </DeckGL>
       </div>
 
-      {/* Offscreen Particle Canvas (Rendered independently via Worker) */}
+      {/* 
+        Particle visualization runs entirely in a Web Worker via OffscreenCanvas.
+        This isolates WebGL rendering from the main thread, preventing particle
+        animation from blocking UI interactions.
+      */}
       <ParticleCanvas
         nodes={relayData?.nodes ?? []}
         viewState={viewState}
@@ -879,13 +854,6 @@ export default function TorMap() {
       {/* Update notification */}
       <UpdateNotification onRefresh={handleDataRefresh} />
       
-      {/* Particle generation progress (disabled for now as worker handles it silently) */}
-      {/* 
-      {isGeneratingParticles && particleProgress !== null && (
-        <LoadingBar progress={particleProgress} label="Generating particles" />
-      )}
-      */}
-      
       {/* No relay data toast - shown when data was fetched but has no nodes, or no dates available */}
       {!loading && !initialLoading && (
         (dateIndex && dateIndex.dates.length === 0) ? (
@@ -895,7 +863,10 @@ export default function TorMap() {
         ) : null
       )}
 
-      {/* Hover tooltip - Always rendered but hidden when not active to prevent mounting lag */}
+      {/* 
+        Relay tooltip: Pre-rendered (hidden) to eliminate React mount/unmount latency.
+        Position updates via ref for smooth 60fps tracking during mouse movement.
+      */}
       <div
         ref={tooltipRef}
         className="absolute pointer-events-none bg-black/40 backdrop-blur-md text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-tor-green/30 z-10 transition-opacity duration-75"
@@ -926,7 +897,7 @@ export default function TorMap() {
         />
       )}
 
-      {/* Country hover tooltip - Always rendered but hidden when not active */}
+      {/* Country tooltip: Pre-rendered (hidden) for zero-latency display on hover */}
       <CountryTooltip
         ref={countryTooltipRef}
         countryCode=""
