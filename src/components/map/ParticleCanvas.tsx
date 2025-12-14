@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { MapViewState } from '@deck.gl/core';
 import type { AggregatedNode } from '../../lib/types';
 import { countryCentroids } from '../../lib/utils/geo';
+import { config } from '../../lib/config';
 
 interface ParticleCanvasProps {
   nodes: AggregatedNode[];
@@ -105,7 +106,7 @@ export default function ParticleCanvas({
     });
   }, [width, height]);
 
-  // Update Settings (Density, Opacity, Speed, Traffic Type, Path Mode)
+  // Update Settings (Density, Opacity, Speed, Traffic Type, Path Mode, Hidden Probability)
   useEffect(() => {
     if (!workerRef.current) return;
     
@@ -115,7 +116,8 @@ export default function ParticleCanvas({
       opacity,
       speed,
       trafficType,
-      pathMode
+      pathMode,
+      hiddenServiceProbability: config.hiddenServiceProbability
     });
   }, [density, opacity, speed, trafficType, pathMode]);
 

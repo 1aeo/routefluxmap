@@ -31,6 +31,7 @@ interface WorkerMessage {
   trafficType?: 'all' | 'hidden' | 'general';
   pathMode?: 'city' | 'country';
   countryCentroids?: Record<string, [number, number]>;
+  hiddenServiceProbability?: number;
 }
 
 interface Route {
@@ -84,6 +85,8 @@ let currentSpeedFactor = 1.0;
 let currentTrafficType = 'all';
 let currentPathMode: 'city' | 'country' = 'city';
 let currentViewState: ViewState = { longitude: 0, latitude: 0, zoom: 1, width: 800, height: 600 };
+// Hidden service traffic probability (~3-6% of Tor traffic based on research)
+let currentHiddenProbability = 0.04;
 let devicePixelRatio = 1;
 let startTime = 0;
 
@@ -323,7 +326,7 @@ function generateAllRoutes() {
 
   while (allRoutes.length < MAX_ROUTES && attempts < maxAttempts) {
     attempts++;
-    const isHidden = Math.random() < 0.15;
+    const isHidden = Math.random() < currentHiddenProbability;
     let srcIdx: number, tgtIdx: number;
 
     if (isHidden && hsDirIndices.length >= 2) {
@@ -549,15 +552,18 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
   if (msg.type === 'updateSettings') {
     const densityChanged = msg.density !== undefined && msg.density !== currentDensity;
     const pathModeChanged = msg.pathMode !== undefined && msg.pathMode !== currentPathMode;
+    const hiddenProbChanged = msg.hiddenServiceProbability !== undefined && 
+                               msg.hiddenServiceProbability !== currentHiddenProbability;
     
     if (msg.density !== undefined) currentDensity = msg.density;
     if (msg.opacity !== undefined) currentOpacity = msg.opacity;
     if (msg.speed !== undefined) currentSpeedFactor = msg.speed;
     if (msg.trafficType !== undefined) currentTrafficType = msg.trafficType;
     if (msg.pathMode !== undefined) currentPathMode = msg.pathMode;
+    if (msg.hiddenServiceProbability !== undefined) currentHiddenProbability = msg.hiddenServiceProbability;
     
-    // Path mode change requires full rebuild with re-aggregation
-    if (pathModeChanged && rawNodes.length) {
+    // Path mode or hidden probability change requires full rebuild
+    if ((pathModeChanged || hiddenProbChanged) && rawNodes.length) {
       processNodes();
     } else if (densityChanged && allRoutes.length) {
       rebuildBuffersForDensity();
