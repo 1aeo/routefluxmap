@@ -11,12 +11,14 @@ This document provides a recommended order for implementing remaining RouteFluxM
 | 🥇 1 | Map Location URL | High | Low | [Additional Controls](./additional-controls.md#1-map-location-url-persistence) |
 | 🥈 2 | Country Outlier Chart | High | Medium | [Country Outlier](./country-outlier.md) |
 | 🥉 3 | Country Date Histogram | High | Medium | [Country Date Histogram](./country-date-histogram.md) |
-| 4 | Legend Component | Medium | Low | [Additional Controls](./additional-controls.md#9-legend-component) |
-| 5 | Social Sharing | Medium | Low | [Additional Controls](./additional-controls.md#8-social-sharing) |
-| 6 | Bezier Path Curves | Medium | High | [Bezier Path Offset](./bezier-path-offset.md) |
-| 7 | Node/Country Sliders | Low | Low | [Additional Controls](./additional-controls.md#2-node-count-slider) |
-| 8 | Scaling Toggles | Low | Low | [Additional Controls](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes) |
-| 9 | Other Controls | Very Low | Low | [Additional Controls](./additional-controls.md) |
+| 4 | Multi-Source Geolocation (Phase 1) | High | Low | [Multi-Source Geolocation](./multi-source-geolocation.md) |
+| 5 | Legend Component | Medium | Low | [Additional Controls](./additional-controls.md#9-legend-component) |
+| 6 | Social Sharing | Medium | Low | [Additional Controls](./additional-controls.md#8-social-sharing) |
+| 7 | Multi-Source Geolocation (Phase 2-3) | Medium | Medium | [Multi-Source Geolocation](./multi-source-geolocation.md) |
+| 8 | Bezier Path Curves | Medium | High | [Bezier Path Offset](./bezier-path-offset.md) |
+| 9 | Node/Country Sliders | Low | Low | [Additional Controls](./additional-controls.md#2-node-count-slider) |
+| 10 | Scaling Toggles | Low | Low | [Additional Controls](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes) |
+| 11 | Other Controls | Very Low | Low | [Additional Controls](./additional-controls.md) |
 
 ---
 
@@ -74,11 +76,32 @@ This document provides a recommended order for implementing remaining RouteFluxM
 
 ---
 
-### Priority 4: Legend Component
+### Priority 4: Multi-Source Geolocation (Phase 1)
+
+**Document:** [Multi-Source Geolocation](./multi-source-geolocation.md)
+
+**Why #4:**
+- **Zero additional cost** - Onionoo already provides country data we're discarding
+- **Research value** - Detect discrepancies between sources
+- **Foundation for future** - Enables toggle feature (Phase 2-3)
+- **Transparency** - Users can see when sources disagree
+- **AS info for free** - Includes hosting provider data
+
+**Phase 1 includes:**
+- Store Onionoo country, countryName, AS, asName per relay
+- Derive MaxMind country from coordinates
+- Calculate countryMismatch boolean
+- Update data structures
+
+**Implementation time:** ~2-4 hours
+
+---
+
+### Priority 5: Legend Component
 
 **Document:** [Additional Controls → Legend](./additional-controls.md#9-legend-component)
 
-**Why #4:**
+**Why #5:**
 - **Improves comprehension** - Users understand what colors mean
 - **Low effort** - Simple gradient + labels
 - **Professional polish** - Expected in data visualizations
@@ -88,11 +111,11 @@ This document provides a recommended order for implementing remaining RouteFluxM
 
 ---
 
-### Priority 5: Social Sharing
+### Priority 6: Social Sharing
 
 **Document:** [Additional Controls → Social Sharing](./additional-controls.md#8-social-sharing)
 
-**Why #5:**
+**Why #6:**
 - **Helps discoverability** - Users can share interesting findings
 - **Low effort** - Just share URLs to social platforms
 - **Works with Map URL** - Shares specific views (after #1)
@@ -105,11 +128,34 @@ This document provides a recommended order for implementing remaining RouteFluxM
 
 ---
 
-### Priority 6: Bezier Path Curves
+### Priority 7: Multi-Source Geolocation (Phase 2-3)
+
+**Document:** [Multi-Source Geolocation](./multi-source-geolocation.md)
+
+**Why #7:**
+- **Full transparency** - Toggle between sources network-wide
+- **Research capabilities** - Compare database accuracy
+- **User choice** - Let users pick their preferred source
+- **Popup enhancement** - Show all sources with discrepancy indicators
+
+**Phase 2-3 includes:**
+- Enhanced popup showing all geo sources
+- Settings toggle to switch visualization source
+- Re-aggregate nodes based on selected source
+- Optional: Add IP2Location as second coordinate source
+
+**Implementation time:** ~8-12 hours (both phases)
+
+**Dependencies:**
+- Multi-Source Geolocation Phase 1 (#4)
+
+---
+
+### Priority 8: Bezier Path Curves
 
 **Document:** [Bezier Path Offset](./bezier-path-offset.md)
 
-**Why #6:**
+**Why #8:**
 - **Visual polish** - Makes particle paths look like flight routes
 - **Distinctive look** - Curved arcs are visually appealing
 - **Higher complexity** - Requires shader work or CPU bezier math
@@ -121,11 +167,11 @@ This document provides a recommended order for implementing remaining RouteFluxM
 
 ---
 
-### Priority 7: Node/Country Count Sliders
+### Priority 9: Node/Country Count Sliders
 
 **Document:** [Additional Controls → Node Count](./additional-controls.md#2-node-count-slider), [Country Count](./additional-controls.md#3-country-count-slider)
 
-**Why #7:**
+**Why #9:**
 - **Power user feature** - Most users won't adjust
 - **Low effort** - Simple slider + filter
 - **Performance tuning** - Useful for slow devices
@@ -135,11 +181,11 @@ This document provides a recommended order for implementing remaining RouteFluxM
 
 ---
 
-### Priority 8: Scaling Toggles
+### Priority 10: Scaling Toggles
 
 **Document:** [Additional Controls → Scaling Options](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes)
 
-**Why #8:**
+**Why #10:**
 - **Niche use cases** - Most users prefer default scaling
 - **Low effort** - Just toggles
 - **Current behavior is good** - Scaling enabled by default
@@ -153,11 +199,11 @@ Includes:
 
 ---
 
-### Priority 9: Other Controls
+### Priority 11: Other Controls
 
 **Document:** [Additional Controls](./additional-controls.md)
 
-**Why #9:**
+**Why #11:**
 - **Very niche features** - Rarely needed
 - **Polish items** - Nice to have, not essential
 
@@ -171,13 +217,14 @@ Includes:
 
 ---
 
-## Quick Wins (< 2 hours each)
+## Quick Wins (< 4 hours each)
 
 If you have limited time, these deliver the most value quickly:
 
 1. ✅ **Map Location URL** - 1 hour, high impact
-2. ✅ **Legend Component** - 1-2 hours, improves UX
-3. ✅ **Social Sharing** - 1-2 hours, helps growth
+2. ✅ **Multi-Source Geo Phase 1** - 2-4 hours, stores data we already fetch
+3. ✅ **Legend Component** - 1-2 hours, improves UX
+4. ✅ **Social Sharing** - 1-2 hours, helps growth
 
 ---
 
@@ -198,6 +245,7 @@ If you have limited time, these deliver the most value quickly:
 
 ### Sprint 1: Foundation (1 day)
 - [ ] Map Location URL
+- [ ] Multi-Source Geo Phase 1 (store Onionoo data)
 - [ ] Legend Component  
 - [ ] Social Sharing
 
@@ -206,7 +254,11 @@ If you have limited time, these deliver the most value quickly:
 - [ ] Country Date Histogram
 - [ ] Country code mapping utility
 
-### Sprint 3: Polish (1-2 days)
+### Sprint 3: Geolocation Transparency (1-2 days)
+- [ ] Multi-Source Geo Phase 2 (popup enhancement)
+- [ ] Multi-Source Geo Phase 3 (settings toggle)
+
+### Sprint 4: Polish (1-2 days)
 - [ ] Bezier Path Curves
 - [ ] Any remaining controls
 
@@ -216,14 +268,19 @@ If you have limited time, these deliver the most value quickly:
 
 ```
 Map Location URL (#1)
-    └── Social Sharing (#5) [shares meaningful URLs]
+    └── Social Sharing (#6) [shares meaningful URLs]
     └── Country URL linking [future enhancement]
 
 Country Outlier Chart (#2)
     ├── Country history data [data pipeline]
     └── Country Date Histogram (#3) [shares modal]
 
-Bezier Paths (#6)
+Multi-Source Geo Phase 1 (#4)
+    └── Multi-Source Geo Phase 2-3 (#7) [requires data in files]
+        ├── Popup geo source display
+        └── Settings source toggle
+
+Bezier Paths (#8)
     └── (No dependencies)
 ```
 
@@ -263,7 +320,9 @@ These features were intentionally excluded:
 1. Map URL (trivial)
 2. Outlier Chart (medium)
 3. Date Histogram (medium)
-4. Legend (easy)
-5. Sharing (easy)
-6. Bezier Paths (complex)
-7-9. Various controls (easy)
+4. Multi-Source Geo Phase 1 (easy - store existing data)
+5. Legend (easy)
+6. Sharing (easy)
+7. Multi-Source Geo Phase 2-3 (medium)
+8. Bezier Paths (complex)
+9-11. Various controls (easy)
