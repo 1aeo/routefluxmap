@@ -194,8 +194,7 @@ export default function DateSliderChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const sliderTrackRef = useRef<HTMLDivElement>(null);
   
-  // Use refs for dragging state to avoid re-renders and recalculations during drag
-  const isDraggingRef = useRef(false);
+  // Dragging state for slider interaction
   const [isDragging, setIsDragging] = useState(false);
   const cachedRectRef = useRef<DOMRect | null>(null);
   const lastBucketIndexRef = useRef<number>(-1);
@@ -384,7 +383,6 @@ export default function DateSliderChart({
     // Cache bounding rect once at drag start (avoids reflow during drag)
     cachedRectRef.current = track.getBoundingClientRect();
     lastBucketIndexRef.current = -1; // Reset to allow first click
-    isDraggingRef.current = true;
     setIsDragging(true);
     
     // Attach listeners only when dragging
@@ -393,7 +391,6 @@ export default function DateSliderChart({
     };
     
     const handleMouseUp = () => {
-      isDraggingRef.current = false;
       cachedRectRef.current = null;
       setIsDragging(false);
       document.removeEventListener('mousemove', handleMouseMove);

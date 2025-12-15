@@ -184,7 +184,6 @@ export default function TorMap() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-
   // Close settings panel when entering cinema mode
   useEffect(() => {
     if (cinemaMode && showSettings) {
@@ -578,22 +577,22 @@ export default function TorMap() {
       const dates = dateIndex?.dates;
       const currentIdx = currentDateRef.current && dates ? dates.indexOf(currentDateRef.current) : -1;
       
+      // Helper to navigate and update URL hash
+      const navigateTo = (date: string) => {
+        handleDateChange(date);
+        window.location.hash = `date=${date}`;
+      };
+      
       switch (e.key) {
         case 'h':
         case 'H':
           setCinemaMode(prev => !prev);
           break;
         case 'ArrowLeft':
-          if (dates && currentIdx > 0) {
-            handleDateChange(dates[currentIdx - 1]);
-            window.location.hash = `date=${dates[currentIdx - 1]}`;
-          }
+          if (dates && currentIdx > 0) navigateTo(dates[currentIdx - 1]);
           break;
         case 'ArrowRight':
-          if (dates && currentIdx >= 0 && currentIdx < dates.length - 1) {
-            handleDateChange(dates[currentIdx + 1]);
-            window.location.hash = `date=${dates[currentIdx + 1]}`;
-          }
+          if (dates && currentIdx >= 0 && currentIdx < dates.length - 1) navigateTo(dates[currentIdx + 1]);
           break;
         case ' ':
           e.preventDefault();
@@ -601,17 +600,11 @@ export default function TorMap() {
           break;
         case 'Home':
           e.preventDefault();
-          if (dates && dates.length > 0 && currentIdx > 0) {
-            handleDateChange(dates[0]);
-            window.location.hash = `date=${dates[0]}`;
-          }
+          if (dates?.length && currentIdx > 0) navigateTo(dates[0]);
           break;
         case 'End':
           e.preventDefault();
-          if (dates && dates.length > 0 && currentIdx < dates.length - 1) {
-            handleDateChange(dates[dates.length - 1]);
-            window.location.hash = `date=${dates[dates.length - 1]}`;
-          }
+          if (dates?.length && currentIdx >= 0 && currentIdx < dates.length - 1) navigateTo(dates[dates.length - 1]);
           break;
       }
     };
