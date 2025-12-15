@@ -10,7 +10,7 @@ import { Map } from 'react-map-gl/maplibre';
 import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
 import { config } from '../../lib/config';
-import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode, updateCountryCode } from '../../lib/utils/url';
+import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode } from '../../lib/utils/url';
 import { countryCentroids, threeToTwo, findCountryAtLocation } from '../../lib/utils/geo';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 
@@ -100,7 +100,6 @@ export default function TorMap() {
   });
   
   // Particle settings
-  const [particleCount, setParticleCount] = useState(50000); // Start with lower count for performance
   const [lineDensityFactor, setLineDensityFactor] = useState(0.5);
   const [lineOpacityFactor, setLineOpacityFactor] = useState(0.5);
   const [lineSpeedFactor, setLineSpeedFactor] = useState(0.5);
@@ -109,9 +108,11 @@ export default function TorMap() {
   const [visibleNodeIndices, setVisibleNodeIndices] = useState<Set<number>>(new Set()); // Indices from particle worker
   const [indicesDataVersion, setIndicesDataVersion] = useState<string | null>(null); // Track which data version indices belong to
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0); // 1x playback speed for date animation
+  const [isPlaying, setIsPlaying] = useState(false); // Playback state (lifted from DateSliderChart)
   const [showSettings, setShowSettings] = useState(false);
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
   const [pathMode, setPathMode] = useState<'city' | 'country'>('city'); // City or Country path mode
+  const [cinemaMode, setCinemaMode] = useState(false); // Hide UI for presentation mode
   
   // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
@@ -121,24 +122,10 @@ export default function TorMap() {
   const [relayOpacity, setRelayOpacity] = useState(1);
   const relayTransitionRef = useRef<{ animationId: number | null; startTime: number }>({ animationId: null, startTime: 0 });
   const prevRelayDataRef = useRef<RelayData | null>(null);
+  
+  // Playback interval ref (for cinema mode persistence)
+  const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Adaptive particle count: scales with network bandwidth
-  // K=400: at baseline ~1000 bandwidth, gives ~400k particles (~0.2/pixel on 1080p)
-  const adaptiveParticleCount = useMemo(() => {
-    if (!relayData) return config.particleCount.default;
-    
-    const scaled = Math.round(relayData.bandwidth * config.particleScaleFactor);
-    return Math.max(config.particleCount.min, Math.min(scaled, config.particleCount.max));
-  }, [relayData]);
-
-  // Apply adaptive particle count when data loads (scales with network bandwidth)
-  const adaptiveAppliedRef = useRef(false);
-  useEffect(() => {
-    if (relayData && !adaptiveAppliedRef.current) {
-      setParticleCount(adaptiveParticleCount);
-      adaptiveAppliedRef.current = true;
-    }
-  }, [relayData, adaptiveParticleCount]);
 
   // Clear hover/popup when relay layer is hidden
   const handleLayerVisibilityChange = useCallback((newVisibility: LayerVisibility) => {
@@ -196,6 +183,26 @@ export default function TorMap() {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Cinema mode keyboard shortcut (H key)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'h' || e.key === 'H') {
+        setCinemaMode(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Close settings panel when entering cinema mode
+  useEffect(() => {
+    if (cinemaMode && showSettings) {
+      setShowSettings(false);
+    }
+  }, [cinemaMode, showSettings]);
   
   // Helper to unproject screen coords to [lng, lat] via deck.gl viewport
   const unprojectCoords = useCallback((x: number, y: number): [number, number] | null => {
@@ -538,6 +545,41 @@ export default function TorMap() {
     setPopupPosition(null);
   }, []);
 
+  // Track current date in ref for playback interval (avoids recreating interval on every date change)
+  const currentDateRef = useRef(currentDate);
+  currentDateRef.current = currentDate;
+
+  // Playback interval - runs in TorMap so it persists in cinema mode
+  // Uses ref for currentDate to avoid recreating interval on every date change
+  useEffect(() => {
+    if (!isPlaying || !dateIndex) {
+      if (playIntervalRef.current) {
+        clearInterval(playIntervalRef.current);
+        playIntervalRef.current = null;
+      }
+      return;
+    }
+    
+    const playSpeed = Math.round(500 / playbackSpeed);
+    const dates = dateIndex.dates;
+    
+    playIntervalRef.current = setInterval(() => {
+      const currentIdx = currentDateRef.current ? dates.indexOf(currentDateRef.current) : -1;
+      const isAtEnd = currentIdx < 0 || currentIdx >= dates.length - 1;
+      
+      // Loop back to start when reaching end
+      if (isAtEnd) {
+        handleDateChange(dates[0]);
+      } else {
+        handleDateChange(dates[currentIdx + 1]);
+      }
+    }, playSpeed);
+    
+    return () => {
+      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
+    };
+  }, [isPlaying, playbackSpeed, dateIndex, handleDateChange]);
+
   // Handle click on relay marker
   const handleClick = useCallback((info: PickingInfo) => {
     if (info.object) {
@@ -877,7 +919,7 @@ export default function TorMap() {
           viewState={viewState}
           onViewStateChange={handleViewStateChange}
           controller={true}
-          layers={layers}
+          layers={baseLayers}
           onClick={handleDeckClick} // Handle background clicks
           // Custom cursor: pointer when hovering relays or countries, grab otherwise
           getCursor={() => hoverInfo || lastCountryCodeRef.current ? 'pointer' : 'grab'}
@@ -912,8 +954,8 @@ export default function TorMap() {
         onVisibleNodesChange={handleVisibleNodesChange}
       />
 
-      {/* Attribution - only show after loaded */}
-      {!initialLoading && mapLoaded && (
+      {/* Attribution - only show after loaded, hidden in cinema mode */}
+      {!initialLoading && mapLoaded && !cinemaMode && (
         <div className="absolute bottom-1 right-0 z-50 px-1 text-[10px] bg-black/70 text-gray-400 pointer-events-auto">
           {config.attributions.map(({ name, url, prefix, suffix }, i) => (
             <span key={name}>{i > 0 && ', '}{prefix && `${prefix} `}<a href={url} target="_blank" rel="noopener" className="text-tor-green hover:underline">{name}</a>{suffix && ` ${suffix}`}</span>
@@ -983,119 +1025,124 @@ export default function TorMap() {
       />
 
       {/* Header + Layer Controls - top left */}
-      <div className="absolute top-4 left-4 z-10">
-        <div className="bg-black/40 backdrop-blur-md rounded-lg p-3 border border-tor-green/20">
-          {/* Logo/Title */}
-          <div className="flex items-center gap-2 mb-3 pb-2 border-b border-tor-green/10">
-            <svg className="w-6 h-6" viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2" className="text-tor-green-dark"/>
-              <circle cx="16" cy="16" r="8" stroke="currentColor" strokeWidth="2" className="text-tor-green"/>
-              <circle cx="16" cy="16" r="3" fill="currentColor" className="text-tor-green"/>
-            </svg>
-            <div>
-              <h1 className="text-lg font-bold leading-tight">
-                <span className="text-tor-green">Route</span> <span className="text-white">Flux Map</span>
-              </h1>
-              <p className="text-gray-500 text-[10px]">Visualizing the Tor Network</p>
+      {!cinemaMode && (
+        <div className="absolute top-4 left-4 z-10">
+          <div className="bg-black/40 backdrop-blur-md rounded-lg p-3 border border-tor-green/20">
+            {/* Logo/Title */}
+            <div className="flex items-center gap-2 mb-3 pb-2 border-b border-tor-green/10">
+              <svg className="w-6 h-6" viewBox="0 0 32 32" fill="none">
+                <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2" className="text-tor-green-dark"/>
+                <circle cx="16" cy="16" r="8" stroke="currentColor" strokeWidth="2" className="text-tor-green"/>
+                <circle cx="16" cy="16" r="3" fill="currentColor" className="text-tor-green"/>
+              </svg>
+              <div>
+                <h1 className="text-lg font-bold leading-tight">
+                  <span className="text-tor-green">Route</span> <span className="text-white">Flux Map</span>
+                </h1>
+                <p className="text-gray-500 text-[10px]">Visualizing the Tor Network</p>
+              </div>
             </div>
+            
+            {/* Layer toggles */}
+            <LayerControls
+              visibility={layerVisibility}
+              onVisibilityChange={handleLayerVisibilityChange}
+              showParticles={true}
+              compact={true}
+            />
           </div>
-          
-          {/* Layer toggles */}
-          <LayerControls
-            visibility={layerVisibility}
-            onVisibilityChange={handleLayerVisibilityChange}
-            showParticles={true}
-            compact={true}
-          />
         </div>
-      </div>
+      )}
 
       {/* Legend panel - bottom right (offset to avoid map credits) */}
       {/* Mobile: Collapsible, positioned above date slider. Desktop: Always visible */}
-      <div 
-        className={`absolute z-20 bg-black/40 backdrop-blur-md rounded-lg border border-tor-green/20 transition-all duration-200 ${
-          isMobile ? 'right-3' : 'bottom-10 right-4'
-        }`}
-        style={isMobile 
-          ? { bottom: MOBILE_CONTROLS_BOTTOM, ...(legendExpanded ? { minWidth: '130px' } : { width: '40px', height: '40px' }) }
-          : { minWidth: '130px' }
-        }
-      >
-        {/* Mobile collapsed state - just an icon button */}
-        {isMobile && !legendExpanded ? (
-          <button
-            onClick={() => setLegendExpanded(true)}
-            className="w-full h-full flex items-center justify-center text-tor-green"
-            aria-label="Show legend"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </button>
-        ) : (
-          <div className="px-3 pt-3 pb-1.5 relative">
-            {/* Mobile: Close button - positioned prominently */}
-            {isMobile && (
-              <button
-                onClick={() => setLegendExpanded(false)}
-                className="absolute -top-2 -right-2 w-7 h-7 flex items-center justify-center bg-black/80 rounded-full border border-tor-green/30 text-gray-300 active:bg-tor-green/30"
-                aria-label="Close legend"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-            
-            {/* Last updated */}
-            {dateIndex && (
-              <div className="text-gray-500 text-[10px] pb-2 mb-2 border-b border-white/10">
-                Last updated: <span className="text-tor-green">{new Date(dateIndex.lastUpdated).toLocaleDateString()}</span>
-              </div>
-            )}
-            
-            {/* Relay Type Legend */}
-            <div className="space-y-0.5">
-              <div className="text-xs text-gray-400 mb-1">Relay Types</div>
-              {[
-                { key: 'exit' as const, label: 'Exit', desc: 'outbound traffic', extraClass: '' },
-                { key: 'guard' as const, label: 'Guard', desc: 'entry point', extraClass: '' },
-                { key: 'middle' as const, label: 'Middle', desc: 'intermediate', extraClass: '' },
-                { key: 'hidden' as const, label: 'HSDir', desc: 'hidden services', extraClass: 'mt-1' },
-              ].map(({ key, label, desc, extraClass }) => (
-                <div key={key} className={`flex items-center gap-1.5 text-[10px] ${extraClass}`}>
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors[key].slice(0, 3).join(',')})` }} />
-                  <span className="text-gray-400">{label}</span>
-                  {!isMobile && <span className="text-gray-600 text-[9px]">– {desc}</span>}
-                </div>
-              ))}
-            </div>
-            
-            {/* Source Code link */}
-            <a 
-              href="https://github.com/1aeo/routefluxmap"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-center gap-1 text-gray-500 hover:text-tor-green transition-colors text-[10px]"
+      {!cinemaMode && (
+        <div 
+          className={`absolute z-20 bg-black/40 backdrop-blur-md rounded-lg border border-tor-green/20 transition-all duration-200 ${
+            isMobile ? 'right-3' : 'bottom-10 right-4'
+          }`}
+          style={isMobile 
+            ? { bottom: MOBILE_CONTROLS_BOTTOM, ...(legendExpanded ? { minWidth: '130px' } : { width: '40px', height: '40px' }) }
+            : { minWidth: '130px' }
+          }
+        >
+          {/* Mobile collapsed state - just an icon button */}
+          {isMobile && !legendExpanded ? (
+            <button
+              onClick={() => setLegendExpanded(true)}
+              className="w-full h-full flex items-center justify-center text-tor-green"
+              aria-label="Show legend"
             >
-              Source Code
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-            </a>
-          </div>
-        )}
-      </div>
+            </button>
+          ) : (
+            <div className="px-3 pt-3 pb-1.5 relative">
+              {/* Mobile: Close button - positioned prominently */}
+              {isMobile && (
+                <button
+                  onClick={() => setLegendExpanded(false)}
+                  className="absolute -top-2 -right-2 w-7 h-7 flex items-center justify-center bg-black/80 rounded-full border border-tor-green/30 text-gray-300 active:bg-tor-green/30"
+                  aria-label="Close legend"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+              
+              {/* Last updated */}
+              {dateIndex && (
+                <div className="text-gray-500 text-[10px] pb-2 mb-2 border-b border-white/10">
+                  Last updated: <span className="text-tor-green">{new Date(dateIndex.lastUpdated).toLocaleDateString()}</span>
+                </div>
+              )}
+              
+              {/* Relay Type Legend */}
+              <div className="space-y-0.5">
+                <div className="text-xs text-gray-400 mb-1">Relay Types</div>
+                {[
+                  { key: 'exit' as const, label: 'Exit', desc: 'outbound traffic', extraClass: '' },
+                  { key: 'guard' as const, label: 'Guard', desc: 'entry point', extraClass: '' },
+                  { key: 'middle' as const, label: 'Middle', desc: 'intermediate', extraClass: '' },
+                  { key: 'hidden' as const, label: 'HSDir', desc: 'hidden services', extraClass: 'mt-1' },
+                ].map(({ key, label, desc, extraClass }) => (
+                  <div key={key} className={`flex items-center gap-1.5 text-[10px] ${extraClass}`}>
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `rgb(${config.relayColors[key].slice(0, 3).join(',')})` }} />
+                    <span className="text-gray-400">{label}</span>
+                    {!isMobile && <span className="text-gray-600 text-[9px]">– {desc}</span>}
+                  </div>
+                ))}
+              </div>
+              
+              {/* Source Code link */}
+              <a 
+                href="https://github.com/1aeo/routefluxmap"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-center gap-1 text-gray-500 hover:text-tor-green transition-colors text-[10px]"
+              >
+                Source Code
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Date controls - bottom center with proper spacing from side content */}
       {/* Mobile: Full width with generous bottom padding to clear gesture nav. Desktop: Centered with margins */}
-      <div 
-        className={`absolute left-0 right-0 z-10 flex justify-center pointer-events-none ${
-          isMobile ? 'px-2' : 'bottom-4'
-        }`}
-        style={isMobile ? { bottom: `max(${MOBILE_SLIDER_BOTTOM}px, calc(env(safe-area-inset-bottom, 24px) + 60px))` } : undefined}
-      >
-        <div className="pointer-events-auto w-full max-w-[calc(100%-16px)] sm:w-auto sm:max-w-none">
+      {!cinemaMode && (
+        <div 
+          className={`absolute left-0 right-0 z-10 flex justify-center pointer-events-none ${
+            isMobile ? 'px-2' : 'bottom-4'
+          }`}
+          style={isMobile ? { bottom: `max(${MOBILE_SLIDER_BOTTOM}px, calc(env(safe-area-inset-bottom, 24px) + 60px))` } : undefined}
+        >
+          <div className="pointer-events-auto w-full max-w-[calc(100%-16px)] sm:w-auto sm:max-w-none">
           {/* Combined date slider with histogram - only show when multiple dates */}
           {dateIndex && currentDate && dateIndex.dates.length > 1 && relayStats && (
             <DateSliderChart
@@ -1106,24 +1153,27 @@ export default function TorMap() {
               onPlaybackSpeedChange={setPlaybackSpeed}
               relayCount={relayStats.relayCount}
               locationCount={relayStats.locationCount}
+              isPlaying={isPlaying}
+              onPlayingChange={setIsPlaying}
             />
           )}
 
-          {/* Single date display (when only one date available) */}
-          {dateIndex && currentDate && dateIndex.dates.length === 1 && (
-            <div className="bg-black/40 backdrop-blur-md rounded-lg px-3 py-2 border border-tor-green/20 text-center">
-              <div className="text-tor-green text-sm font-medium">
-                {new Date(currentDate).toLocaleDateString('en-US', {
-                  weekday: isMobile ? 'short' : 'long',
-                  year: 'numeric',
-                  month: isMobile ? 'short' : 'long',
-                  day: 'numeric',
-                })}
+            {/* Single date display (when only one date available) */}
+            {dateIndex && currentDate && dateIndex.dates.length === 1 && (
+              <div className="bg-black/40 backdrop-blur-md rounded-lg px-3 py-2 border border-tor-green/20 text-center">
+                <div className="text-tor-green text-sm font-medium">
+                  {new Date(currentDate).toLocaleDateString('en-US', {
+                    weekday: isMobile ? 'short' : 'long',
+                    year: 'numeric',
+                    month: isMobile ? 'short' : 'long',
+                    day: 'numeric',
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Zoom controls - responsive positioning */}
       {/* Mobile: above date slider. Desktop: bottom-left */}
@@ -1131,64 +1181,93 @@ export default function TorMap() {
         className={`absolute z-10 flex flex-col gap-1 ${isMobile ? 'left-3' : 'bottom-8 left-4'}`}
         style={isMobile ? { bottom: MOBILE_CONTROLS_BOTTOM } : undefined}
       >
-        {/* Settings Toggle */}
+        {/* Settings, Zoom controls - hidden in cinema mode */}
+        {!cinemaMode && (
+          <>
+            {/* Settings Toggle */}
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg backdrop-blur-md border transition-colors ${
+                showSettings 
+                  ? 'bg-tor-green text-black border-tor-green' 
+                  : 'bg-black/40 border-tor-green/20 text-tor-green active:bg-tor-green/30'
+              } ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
+              aria-label="Toggle settings"
+              title="Line Settings"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+              </svg>
+            </button>
+
+            {/* Settings Panel (Popup) */}
+            <SettingsPanel
+              show={showSettings}
+              pathMode={pathMode}
+              setPathMode={setPathMode}
+              trafficType={trafficType}
+              setTrafficType={setTrafficType}
+              density={lineDensityFactor}
+              setDensity={setLineDensityFactor}
+              opacity={lineOpacityFactor}
+              setOpacity={setLineOpacityFactor}
+              speed={lineSpeedFactor}
+              setSpeed={setLineSpeedFactor}
+              relaySize={relaySizeScale}
+              setRelaySize={setRelaySizeScale}
+              filterRelaysByTraffic={filterRelaysByTraffic}
+              setFilterRelaysByTraffic={setFilterRelaysByTraffic}
+              trafficEnabled={layerVisibility.particles}
+            />
+
+            {/* Zoom buttons */}
+            <button
+              onClick={() => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }))}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green active:bg-tor-green/30 transition-colors ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
+              aria-label="Zoom in"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12M6 12h12" />
+              </svg>
+            </button>
+            <button
+              onClick={() => setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom - 1, 1) }))}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green active:bg-tor-green/30 transition-colors ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
+              aria-label="Zoom out"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 12h12" />
+              </svg>
+            </button>
+            <div className="text-center text-[9px] text-gray-500 mt-0.5">
+              {viewState.zoom.toFixed(1)}x
+            </div>
+          </>
+        )}
+
+        {/* Cinema Mode Toggle - always visible */}
         <button
-          onClick={() => setShowSettings(!showSettings)}
+          onClick={() => setCinemaMode(!cinemaMode)}
           className={`w-9 h-9 flex items-center justify-center rounded-lg backdrop-blur-md border transition-colors ${
-            showSettings 
+            cinemaMode 
               ? 'bg-tor-green text-black border-tor-green' 
               : 'bg-black/40 border-tor-green/20 text-tor-green active:bg-tor-green/30'
           } ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
-          aria-label="Toggle settings"
-          title="Line Settings"
+          aria-label={cinemaMode ? 'Exit cinema mode' : 'Enter cinema mode'}
+          title={cinemaMode ? 'Exit cinema mode (H)' : 'Cinema mode - hide UI (H)'}
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-          </svg>
+          {cinemaMode ? (
+            // Exit fullscreen icon
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
+            </svg>
+          ) : (
+            // Enter fullscreen icon
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+            </svg>
+          )}
         </button>
-
-        {/* Settings Panel (Popup) */}
-        <SettingsPanel
-          show={showSettings}
-          pathMode={pathMode}
-          setPathMode={setPathMode}
-          trafficType={trafficType}
-          setTrafficType={setTrafficType}
-          density={lineDensityFactor}
-          setDensity={setLineDensityFactor}
-          opacity={lineOpacityFactor}
-          setOpacity={setLineOpacityFactor}
-          speed={lineSpeedFactor}
-          setSpeed={setLineSpeedFactor}
-          relaySize={relaySizeScale}
-          setRelaySize={setRelaySizeScale}
-          filterRelaysByTraffic={filterRelaysByTraffic}
-          setFilterRelaysByTraffic={setFilterRelaysByTraffic}
-          trafficEnabled={layerVisibility.particles}
-        />
-
-        {/* Zoom buttons */}
-        <button
-          onClick={() => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }))}
-          className={`w-9 h-9 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green active:bg-tor-green/30 transition-colors ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
-          aria-label="Zoom in"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12M6 12h12" />
-          </svg>
-        </button>
-        <button
-          onClick={() => setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom - 1, 1) }))}
-          className={`w-9 h-9 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green active:bg-tor-green/30 transition-colors ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
-          aria-label="Zoom out"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 12h12" />
-          </svg>
-        </button>
-        <div className="text-center text-[9px] text-gray-500 mt-0.5">
-          {viewState.zoom.toFixed(1)}x
-        </div>
       </div>
 
       {/* Loading indicator (non-blocking) */}

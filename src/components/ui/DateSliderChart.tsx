@@ -21,6 +21,8 @@ interface DateSliderChartProps {
   onPlaybackSpeedChange: (speed: number) => void;
   relayCount: number;
   locationCount: number;
+  isPlaying: boolean;
+  onPlayingChange: (playing: boolean) => void;
 }
 
 // Aggregation mode
@@ -184,12 +186,11 @@ export default function DateSliderChart({
   onPlaybackSpeedChange,
   relayCount,
   locationCount,
+  isPlaying,
+  onPlayingChange,
 }: DateSliderChartProps) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const playSpeed = Math.round(500 / playbackSpeed);
   const [containerWidth, setContainerWidth] = useState(MAX_SLIDER_WIDTH);
   const [isMobile, setIsMobile] = useState(false);
-  const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sliderTrackRef = useRef<HTMLDivElement>(null);
   
@@ -425,32 +426,8 @@ export default function DateSliderChart({
   
   // Play/pause animation
   const togglePlay = useCallback(() => {
-    setIsPlaying(prev => !prev);
-  }, []);
-  
-  // Handle play animation
-  useEffect(() => {
-    if (!isPlaying) {
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
-        playIntervalRef.current = null;
-      }
-      return;
-    }
-    
-    playIntervalRef.current = setInterval(() => {
-      // Loop back to start when reaching end
-      if (isAtEnd) {
-        navigateToDate(dates[0]);
-      } else {
-        navigateToDate(dates[currentIndex + 1]);
-      }
-    }, playSpeed);
-    
-    return () => {
-      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
-    };
-  }, [isPlaying, isAtEnd, currentIndex, dates, navigateToDate, playSpeed]);
+    onPlayingChange(!isPlaying);
+  }, [isPlaying, onPlayingChange]);
   
   // Keyboard navigation
   useEffect(() => {
