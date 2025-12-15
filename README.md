@@ -2,7 +2,7 @@
 
 A modern, real-time visualization of the Tor network showing relay bandwidth and data flow patterns.
 
-![RouteFluxMap Screenshot](public/sample.png)
+![RouteFluxMap Screenshot](public/screenshot.png)
 
 ## 🚀 Features
 
