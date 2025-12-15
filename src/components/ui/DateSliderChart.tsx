@@ -49,6 +49,12 @@ const MAX_MONTHS_DISPLAY = 36;
 // Speed options
 const SPEED_OPTIONS = [1, 2, 4] as const;
 
+// Shared button styles to reduce duplication
+const NAV_BTN_BASE = 'flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green transition-colors';
+const NAV_BTN_DISABLED = 'disabled:opacity-30 disabled:cursor-not-allowed';
+const NAV_BTN_DESKTOP = 'w-7 h-7 hover:bg-tor-green/30';
+const NAV_BTN_MOBILE = 'w-8 h-8 active:bg-tor-green/40';
+
 // Reusable SVG icons
 const ChevronLeftIcon = ({ size = 4 }: { size?: number }) => (
   <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -58,6 +64,11 @@ const ChevronLeftIcon = ({ size = 4 }: { size?: number }) => (
 const ChevronRightIcon = ({ size = 4 }: { size?: number }) => (
   <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+  </svg>
+);
+const DoubleChevronRightIcon = ({ size = 4 }: { size?: number }) => (
+  <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 5l7 7-7 7M6 5l7 7-7 7" />
   </svg>
 );
 const PlayIcon = ({ size = 3.5 }: { size?: number }) => (
@@ -115,68 +126,44 @@ function interpolateColor(color1: string, color2: string, factor: number): strin
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-// Aggregate data by month
-function aggregateByMonth(dates: string[], bandwidths: number[]): AggregatedData[] {
-  const monthMap = new Map<string, AggregatedData>();
+// Generic aggregation function - reduces duplication between month/year aggregation
+function aggregateByPeriod(
+  dates: string[],
+  bandwidths: number[],
+  getKey: (date: string) => string,
+  formatLabel: (key: string) => string
+): AggregatedData[] {
+  const map = new Map<string, AggregatedData>();
   
-  dates.forEach((date, i) => {
-    const monthKey = getMonthKey(date);
+  for (let i = 0; i < dates.length; i++) {
+    const date = dates[i];
+    const key = getKey(date);
     const bw = bandwidths[i] || 0;
     
-    if (!monthMap.has(monthKey)) {
-      monthMap.set(monthKey, {
-        key: monthKey,
-        label: formatMonth(monthKey),
+    let entry = map.get(key);
+    if (!entry) {
+      entry = {
+        key,
+        label: formatLabel(key),
         bandwidth: 0,
         dates: [],
         startDate: date,
         endDate: date,
-      });
+      };
+      map.set(key, entry);
     }
     
-    const entry = monthMap.get(monthKey)!;
     entry.bandwidth += bw;
     entry.dates.push(date);
     entry.endDate = date;
-  });
+  }
   
-  monthMap.forEach(entry => {
-    entry.bandwidth = entry.bandwidth / entry.dates.length;
-  });
+  // Convert sum to average
+  for (const entry of map.values()) {
+    entry.bandwidth /= entry.dates.length;
+  }
   
-  return Array.from(monthMap.values());
-}
-
-// Aggregate data by year
-function aggregateByYear(dates: string[], bandwidths: number[]): AggregatedData[] {
-  const yearMap = new Map<string, AggregatedData>();
-  
-  dates.forEach((date, i) => {
-    const yearKey = getYearKey(date);
-    const bw = bandwidths[i] || 0;
-    
-    if (!yearMap.has(yearKey)) {
-      yearMap.set(yearKey, {
-        key: yearKey,
-        label: formatYear(yearKey),
-        bandwidth: 0,
-        dates: [],
-        startDate: date,
-        endDate: date,
-      });
-    }
-    
-    const entry = yearMap.get(yearKey)!;
-    entry.bandwidth += bw;
-    entry.dates.push(date);
-    entry.endDate = date;
-  });
-  
-  yearMap.forEach(entry => {
-    entry.bandwidth = entry.bandwidth / entry.dates.length;
-  });
-  
-  return Array.from(yearMap.values());
+  return Array.from(map.values());
 }
 
 // Format full date for display
@@ -220,6 +207,10 @@ export default function DateSliderChart({
   }, [dates]);
   const currentIndex = dateToIndex.get(currentDate) ?? -1;
   
+  // Boundary checks - computed once, used by multiple buttons/handlers
+  const isAtStart = currentIndex <= 0;
+  const isAtEnd = currentIndex < 0 || currentIndex >= dates.length - 1;
+  
   // Measure container width and detect mobile
   useEffect(() => {
     const updateWidth = () => {
@@ -262,9 +253,9 @@ export default function DateSliderChart({
     let aggregationMode: AggregationMode = 'days';
     
     if (dates.length > MAX_DAYS_DISPLAY) {
-      const monthData = aggregateByMonth(dates, bandwidths);
+      const monthData = aggregateByPeriod(dates, bandwidths, getMonthKey, formatMonth);
       if (monthData.length > MAX_MONTHS_DISPLAY) {
-        data = aggregateByYear(dates, bandwidths);
+        data = aggregateByPeriod(dates, bandwidths, getYearKey, formatYear);
         aggregationMode = 'years';
       } else {
         data = monthData;
@@ -415,19 +406,22 @@ export default function DateSliderChart({
     handleSliderInteraction(e.clientX);
   }, [handleSliderInteraction]);
   
-  // Navigate to previous date
+  // Navigation functions using precomputed boundary checks
   const goToPrevious = useCallback(() => {
-    if (currentIndex > 0) {
-      navigateToDate(dates[currentIndex - 1]);
-    }
-  }, [currentIndex, dates, navigateToDate]);
+    if (!isAtStart) navigateToDate(dates[currentIndex - 1]);
+  }, [isAtStart, currentIndex, dates, navigateToDate]);
   
-  // Navigate to next date
   const goToNext = useCallback(() => {
-    if (currentIndex >= 0 && currentIndex < dates.length - 1) {
-      navigateToDate(dates[currentIndex + 1]);
-    }
-  }, [currentIndex, dates, navigateToDate]);
+    if (!isAtEnd) navigateToDate(dates[currentIndex + 1]);
+  }, [isAtEnd, currentIndex, dates, navigateToDate]);
+  
+  const goToFirst = useCallback(() => {
+    if (!isAtStart) navigateToDate(dates[0]);
+  }, [isAtStart, dates, navigateToDate]);
+  
+  const goToLatest = useCallback(() => {
+    if (!isAtEnd) navigateToDate(dates[dates.length - 1]);
+  }, [isAtEnd, dates, navigateToDate]);
   
   // Play/pause animation
   const togglePlay = useCallback(() => {
@@ -436,44 +430,56 @@ export default function DateSliderChart({
   
   // Handle play animation
   useEffect(() => {
-    if (isPlaying) {
-      playIntervalRef.current = setInterval(() => {
-        if (currentIndex >= 0 && currentIndex < dates.length - 1) {
-          navigateToDate(dates[currentIndex + 1]);
-        } else {
-          navigateToDate(dates[0]);
-        }
-      }, playSpeed);
-    } else {
+    if (!isPlaying) {
       if (playIntervalRef.current) {
         clearInterval(playIntervalRef.current);
         playIntervalRef.current = null;
       }
+      return;
     }
     
-    return () => {
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
+    playIntervalRef.current = setInterval(() => {
+      // Loop back to start when reaching end
+      if (isAtEnd) {
+        navigateToDate(dates[0]);
+      } else {
+        navigateToDate(dates[currentIndex + 1]);
       }
+    }, playSpeed);
+    
+    return () => {
+      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
     };
-  }, [isPlaying, currentIndex, dates, navigateToDate, playSpeed]);
+  }, [isPlaying, isAtEnd, currentIndex, dates, navigateToDate, playSpeed]);
   
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') {
-        goToPrevious();
-      } else if (e.key === 'ArrowRight') {
-        goToNext();
-      } else if (e.key === ' ') {
-        e.preventDefault();
-        togglePlay();
+      switch (e.key) {
+        case 'ArrowLeft':
+          goToPrevious();
+          break;
+        case 'ArrowRight':
+          goToNext();
+          break;
+        case ' ':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'Home':
+          e.preventDefault();
+          goToFirst();
+          break;
+        case 'End':
+          e.preventDefault();
+          goToLatest();
+          break;
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [goToPrevious, goToNext, togglePlay]);
+  }, [goToPrevious, goToNext, togglePlay, goToFirst, goToLatest]);
   
   if (staticBars.length <= 1) return null;
   
@@ -622,12 +628,11 @@ export default function DateSliderChart({
         <span className={`flex items-center ${isMobile ? 'gap-1' : 'gap-1.5'}`}>
           <span className={`rounded-full bg-tor-green ${isMobile ? 'w-1.5 h-1.5' : 'w-2 h-2'}`} />
           <span className="text-white font-medium">{relayCount.toLocaleString()}</span>
-          {!isMobile && <span className="text-gray-500 text-xs">relays</span>}
-          {isMobile && <span className="text-gray-500">relays</span>}
+          <span className={`text-gray-500 ${isMobile ? '' : 'text-xs'}`}>relays</span>
         </span>
-        <span className="text-gray-600">{isMobile ? '·' : '•'}</span>
+        <span className="text-gray-600">•</span>
         <span className={`text-white font-medium ${isMobile ? '' : 'min-w-[70px] text-center'}`}>{formatBandwidth(currentBandwidth)}</span>
-        <span className="text-gray-600">{isMobile ? '·' : '•'}</span>
+        <span className="text-gray-600">•</span>
         <span className={`flex items-center ${isMobile ? 'gap-0.5' : 'gap-1.5'}`}>
           <LocationIcon size={isMobile ? 2 : 3} />
           <span className="text-white font-medium">{locationCount.toLocaleString()}</span>
@@ -640,10 +645,8 @@ export default function DateSliderChart({
         {/* Previous button */}
         <button
           onClick={goToPrevious}
-          disabled={currentIndex <= 0}
-          className={`flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green disabled:opacity-30 disabled:cursor-not-allowed transition-colors ${
-            isMobile ? 'w-8 h-8 active:bg-tor-green/40' : 'w-7 h-7 hover:bg-tor-green/30'
-          }`}
+          disabled={isAtStart}
+          className={`${NAV_BTN_BASE} ${NAV_BTN_DISABLED} ${isMobile ? NAV_BTN_MOBILE : NAV_BTN_DESKTOP}`}
           aria-label="Previous date"
         >
           <ChevronLeftIcon size={isMobile ? 3.5 : 4} />
@@ -662,13 +665,22 @@ export default function DateSliderChart({
         {/* Next button */}
         <button
           onClick={goToNext}
-          disabled={currentIndex < 0 || currentIndex >= dates.length - 1}
-          className={`flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green disabled:opacity-30 disabled:cursor-not-allowed transition-colors ${
-            isMobile ? 'w-8 h-8 active:bg-tor-green/40' : 'w-7 h-7 hover:bg-tor-green/30'
-          }`}
+          disabled={isAtEnd}
+          className={`${NAV_BTN_BASE} ${NAV_BTN_DISABLED} ${isMobile ? NAV_BTN_MOBILE : NAV_BTN_DESKTOP}`}
           aria-label="Next date"
         >
           <ChevronRightIcon size={isMobile ? 3.5 : 4} />
+        </button>
+        
+        {/* Skip to latest button */}
+        <button
+          onClick={goToLatest}
+          disabled={isAtEnd}
+          className={`${NAV_BTN_BASE} ${NAV_BTN_DISABLED} ${isMobile ? NAV_BTN_MOBILE : NAV_BTN_DESKTOP}`}
+          aria-label="Jump to latest date"
+          title="Jump to latest (End)"
+        >
+          <DoubleChevronRightIcon size={isMobile ? 3.5 : 4} />
         </button>
         
         {/* Spacer - desktop only */}
@@ -677,9 +689,7 @@ export default function DateSliderChart({
         {/* Play/Pause button */}
         <button
           onClick={togglePlay}
-          className={`flex items-center justify-center rounded-full bg-tor-green/20 text-tor-green transition-colors ${
-            isMobile ? 'w-8 h-8 active:bg-tor-green/40' : 'w-7 h-7 hover:bg-tor-green/30'
-          }`}
+          className={`${NAV_BTN_BASE} ${isMobile ? NAV_BTN_MOBILE : NAV_BTN_DESKTOP}`}
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? <PauseIcon size={3.5} /> : <PlayIcon size={3.5} />}
@@ -717,7 +727,7 @@ export default function DateSliderChart({
       {/* Keyboard hint - hide on mobile */}
       {!isMobile && (
         <div className="text-center text-[9px] text-gray-600 mt-2">
-          ← → navigate • Space play/pause
+          ← → navigate • Home/End jump • Space play/pause
         </div>
       )}
     </div>
