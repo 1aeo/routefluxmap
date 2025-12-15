@@ -429,34 +429,7 @@ export default function DateSliderChart({
     onPlayingChange(!isPlaying);
   }, [isPlaying, onPlayingChange]);
   
-  // Keyboard navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case 'ArrowLeft':
-          goToPrevious();
-          break;
-        case 'ArrowRight':
-          goToNext();
-          break;
-        case ' ':
-          e.preventDefault();
-          togglePlay();
-          break;
-        case 'Home':
-          e.preventDefault();
-          goToFirst();
-          break;
-        case 'End':
-          e.preventDefault();
-          goToLatest();
-          break;
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [goToPrevious, goToNext, togglePlay, goToFirst, goToLatest]);
+  // Keyboard navigation is handled by TorMap (so it works in cinema mode)
   
   if (staticBars.length <= 1) return null;
   

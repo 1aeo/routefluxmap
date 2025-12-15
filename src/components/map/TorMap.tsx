@@ -184,18 +184,6 @@ export default function TorMap() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Cinema mode keyboard shortcut (H key)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'h' || e.key === 'H') {
-        setCinemaMode(prev => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   // Close settings panel when entering cinema mode
   useEffect(() => {
@@ -579,6 +567,57 @@ export default function TorMap() {
       if (playIntervalRef.current) clearInterval(playIntervalRef.current);
     };
   }, [isPlaying, playbackSpeed, dateIndex, handleDateChange]);
+
+  // Keyboard shortcuts (H for cinema mode, arrows/space/home/end for playback)
+  // Defined in TorMap so they work even when DateSliderChart is hidden in cinema mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      
+      const dates = dateIndex?.dates;
+      const currentIdx = currentDateRef.current && dates ? dates.indexOf(currentDateRef.current) : -1;
+      
+      switch (e.key) {
+        case 'h':
+        case 'H':
+          setCinemaMode(prev => !prev);
+          break;
+        case 'ArrowLeft':
+          if (dates && currentIdx > 0) {
+            handleDateChange(dates[currentIdx - 1]);
+            window.location.hash = `date=${dates[currentIdx - 1]}`;
+          }
+          break;
+        case 'ArrowRight':
+          if (dates && currentIdx >= 0 && currentIdx < dates.length - 1) {
+            handleDateChange(dates[currentIdx + 1]);
+            window.location.hash = `date=${dates[currentIdx + 1]}`;
+          }
+          break;
+        case ' ':
+          e.preventDefault();
+          setIsPlaying(prev => !prev);
+          break;
+        case 'Home':
+          e.preventDefault();
+          if (dates && dates.length > 0 && currentIdx > 0) {
+            handleDateChange(dates[0]);
+            window.location.hash = `date=${dates[0]}`;
+          }
+          break;
+        case 'End':
+          e.preventDefault();
+          if (dates && dates.length > 0 && currentIdx < dates.length - 1) {
+            handleDateChange(dates[dates.length - 1]);
+            window.location.hash = `date=${dates[dates.length - 1]}`;
+          }
+          break;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [dateIndex, handleDateChange]);
 
   // Handle click on relay marker
   const handleClick = useCallback((info: PickingInfo) => {
