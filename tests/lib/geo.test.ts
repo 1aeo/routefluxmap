@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { getNormalizedPosition, lerp, clamp, getCountryCoords } from '../../src/lib/utils/geo';
+import { 
+  getNormalizedPosition, 
+  lerp, 
+  clamp, 
+  getCountryCoords,
+  findCountryAtLocation,
+  twoToThree,
+  threeToTwo,
+  countryCentroids,
+} from '../../src/lib/utils/geo';
 
 describe('getNormalizedPosition', () => {
   it('normalizes equator/prime meridian to center', () => {
@@ -108,6 +117,299 @@ describe('getCountryCoords', () => {
     const { lat } = getCountryCoords('');
     expect(lat).toBeGreaterThan(30);
     expect(lat).toBeLessThan(45);
+  });
+});
+
+describe('findCountryAtLocation', () => {
+  // Create minimal GeoJSON fixtures for testing
+  const createPolygonFeature = (
+    iso_a2: string,
+    name: string,
+    coords: [number, number][]
+  ): GeoJSON.Feature => ({
+    type: 'Feature',
+    properties: { iso_a2, name },
+    geometry: {
+      type: 'Polygon',
+      coordinates: [coords],
+    },
+  });
+
+  const createMultiPolygonFeature = (
+    iso_a2: string,
+    name: string,
+    polygons: [number, number][][]
+  ): GeoJSON.Feature => ({
+    type: 'Feature',
+    properties: { iso_a2, name },
+    geometry: {
+      type: 'MultiPolygon',
+      coordinates: polygons.map(p => [p]),
+    },
+  });
+
+  // Simple rectangular "US" covering continental US area
+  const usPolygon = createPolygonFeature('US', 'United States', [
+    [-130, 20], [-60, 20], [-60, 50], [-130, 50], [-130, 20]
+  ]);
+
+  // Simple rectangular "DE" covering Germany area
+  const dePolygon = createPolygonFeature('DE', 'Germany', [
+    [5, 47], [15, 47], [15, 55], [5, 55], [5, 47]
+  ]);
+
+  // MultiPolygon for testing (like Hawaii + mainland)
+  const multiPolygonFeature = createMultiPolygonFeature('JP', 'Japan', [
+    // Main island approximation
+    [[130, 30], [145, 30], [145, 45], [130, 45], [130, 30]],
+    // Small island
+    [[125, 25], [130, 25], [130, 28], [125, 28], [125, 25]],
+  ]);
+
+  const mockGeojson: GeoJSON.FeatureCollection = {
+    type: 'FeatureCollection',
+    features: [usPolygon, dePolygon, multiPolygonFeature],
+  };
+
+  it('finds country for point inside polygon', () => {
+    // Point clearly inside US bounds
+    const result = findCountryAtLocation(-100, 35, mockGeojson);
+    expect(result).toEqual({ code: 'US', name: 'United States' });
+  });
+
+  it('finds country for point inside Germany', () => {
+    const result = findCountryAtLocation(10, 51, mockGeojson);
+    expect(result).toEqual({ code: 'DE', name: 'Germany' });
+  });
+
+  it('returns null for point outside all polygons', () => {
+    // Point in the ocean
+    const result = findCountryAtLocation(0, 0, mockGeojson);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for point near but outside polygon', () => {
+    // Just outside US bounds
+    const result = findCountryAtLocation(-135, 35, mockGeojson);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for empty features array', () => {
+    const emptyGeojson: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [],
+    };
+    const result = findCountryAtLocation(-100, 35, emptyGeojson);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for null geojson', () => {
+    const result = findCountryAtLocation(-100, 35, null as any);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for geojson without features', () => {
+    const result = findCountryAtLocation(-100, 35, {} as any);
+    expect(result).toBeNull();
+  });
+
+  it('handles MultiPolygon geometries - main polygon', () => {
+    // Point in main Japan polygon
+    const result = findCountryAtLocation(138, 36, mockGeojson);
+    expect(result).toEqual({ code: 'JP', name: 'Japan' });
+  });
+
+  it('handles MultiPolygon geometries - secondary polygon', () => {
+    // Point in small island polygon
+    const result = findCountryAtLocation(127, 26, mockGeojson);
+    expect(result).toEqual({ code: 'JP', name: 'Japan' });
+  });
+
+  it('handles features without geometry', () => {
+    const geojsonWithNullGeom: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          properties: { iso_a2: 'XX', name: 'NoGeom' },
+          geometry: null as any,
+        },
+        usPolygon,
+      ],
+    };
+    // Should skip the null geometry and find US
+    const result = findCountryAtLocation(-100, 35, geojsonWithNullGeom);
+    expect(result).toEqual({ code: 'US', name: 'United States' });
+  });
+
+  it('returns null when country code is missing from properties', () => {
+    const geojsonNoCode: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { name: 'Unknown Territory' }, // No iso_a2
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[-10, -10], [10, -10], [10, 10], [-10, 10], [-10, -10]]],
+        },
+      }],
+    };
+    const result = findCountryAtLocation(0, 0, geojsonNoCode);
+    expect(result).toBeNull();
+  });
+
+  it('extracts code from alternative property names', () => {
+    const geojsonAltProps: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { ISO_A2: 'FR', NAME: 'France' }, // Uppercase variants
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[-5, 42], [8, 42], [8, 51], [-5, 51], [-5, 42]]],
+        },
+      }],
+    };
+    const result = findCountryAtLocation(2, 46, geojsonAltProps);
+    expect(result).toEqual({ code: 'FR', name: 'France' });
+  });
+
+  it('uses fallback name properties', () => {
+    const geojsonAltName: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { iso_a2: 'IT', admin: 'Italy' }, // 'admin' instead of 'name'
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[6, 36], [18, 36], [18, 47], [6, 47], [6, 36]]],
+        },
+      }],
+    };
+    const result = findCountryAtLocation(12, 42, geojsonAltName);
+    expect(result).toEqual({ code: 'IT', name: 'Italy' });
+  });
+});
+
+describe('country code mappings', () => {
+  describe('twoToThree', () => {
+    it('maps common 2-letter codes to 3-letter codes', () => {
+      expect(twoToThree['US']).toBe('USA');
+      expect(twoToThree['DE']).toBe('DEU');
+      expect(twoToThree['GB']).toBe('GBR');
+      expect(twoToThree['FR']).toBe('FRA');
+      expect(twoToThree['NL']).toBe('NLD');
+      expect(twoToThree['RU']).toBe('RUS');
+      expect(twoToThree['CN']).toBe('CHN');
+      expect(twoToThree['JP']).toBe('JPN');
+    });
+
+    it('contains all expected European countries', () => {
+      const europeanCodes = ['AT', 'BE', 'CH', 'CZ', 'DK', 'ES', 'FI', 'FR', 'DE', 'GB', 'GR', 'HU', 'IE', 'IT', 'NL', 'NO', 'PL', 'PT', 'RO', 'SE'];
+      europeanCodes.forEach(code => {
+        expect(twoToThree[code]).toBeDefined();
+        expect(twoToThree[code]).toHaveLength(3);
+      });
+    });
+
+    it('contains all expected major Tor relay countries', () => {
+      // Top countries by relay count typically
+      const topRelayCountries = ['US', 'DE', 'FR', 'NL', 'GB', 'RU', 'CA', 'SE', 'CH', 'AT'];
+      topRelayCountries.forEach(code => {
+        expect(twoToThree[code]).toBeDefined();
+      });
+    });
+
+    it('has valid 3-letter code format for all entries', () => {
+      Object.entries(twoToThree).forEach(([two, three]) => {
+        expect(two).toMatch(/^[A-Z]{2}$/);
+        expect(three).toMatch(/^[A-Z]{3}$/);
+      });
+    });
+  });
+
+  describe('threeToTwo', () => {
+    it('is the inverse of twoToThree', () => {
+      Object.entries(twoToThree).forEach(([two, three]) => {
+        expect(threeToTwo[three]).toBe(two);
+      });
+    });
+
+    it('maps common 3-letter codes back to 2-letter', () => {
+      expect(threeToTwo['USA']).toBe('US');
+      expect(threeToTwo['DEU']).toBe('DE');
+      expect(threeToTwo['GBR']).toBe('GB');
+      expect(threeToTwo['FRA']).toBe('FR');
+    });
+
+    it('has same number of entries as twoToThree', () => {
+      expect(Object.keys(threeToTwo).length).toBe(Object.keys(twoToThree).length);
+    });
+  });
+});
+
+describe('countryCentroids', () => {
+  it('has valid longitude values for all entries', () => {
+    Object.entries(countryCentroids).forEach(([code, [lng, lat]]) => {
+      expect(lng).toBeGreaterThanOrEqual(-180);
+      expect(lng).toBeLessThanOrEqual(180);
+    });
+  });
+
+  it('has valid latitude values for all entries', () => {
+    Object.entries(countryCentroids).forEach(([code, [lng, lat]]) => {
+      expect(lat).toBeGreaterThanOrEqual(-90);
+      expect(lat).toBeLessThanOrEqual(90);
+    });
+  });
+
+  it('uses 2-letter ISO country codes', () => {
+    Object.keys(countryCentroids).forEach(code => {
+      expect(code).toMatch(/^[A-Z]{2}$/);
+    });
+  });
+
+  it('covers major Tor relay countries', () => {
+    const majorCountries = ['US', 'DE', 'FR', 'NL', 'GB', 'RU', 'CA', 'SE', 'CH', 'AT', 'FI', 'NO', 'PL', 'RO', 'CZ'];
+    majorCountries.forEach(code => {
+      expect(countryCentroids[code]).toBeDefined();
+      expect(countryCentroids[code]).toHaveLength(2);
+    });
+  });
+
+  it('has geographically reasonable centroids', () => {
+    // US should be in Western hemisphere, northern
+    const [usLng, usLat] = countryCentroids['US'];
+    expect(usLng).toBeLessThan(-60);
+    expect(usLat).toBeGreaterThan(25);
+    expect(usLat).toBeLessThan(50);
+
+    // Germany should be in Central Europe
+    const [deLng, deLat] = countryCentroids['DE'];
+    expect(deLng).toBeGreaterThan(5);
+    expect(deLng).toBeLessThan(15);
+    expect(deLat).toBeGreaterThan(47);
+    expect(deLat).toBeLessThan(55);
+
+    // Australia should be in Southern hemisphere
+    const [auLng, auLat] = countryCentroids['AU'];
+    expect(auLng).toBeGreaterThan(110);
+    expect(auLng).toBeLessThan(155);
+    expect(auLat).toBeLessThan(0); // Southern hemisphere
+  });
+
+  it('includes French overseas territories', () => {
+    const frenchTerritories = ['GF', 'GP', 'MQ', 'RE', 'YT', 'NC', 'PF'];
+    frenchTerritories.forEach(code => {
+      expect(countryCentroids[code]).toBeDefined();
+    });
+  });
+
+  it('includes US territories', () => {
+    const usTerritories = ['PR', 'VI', 'GU', 'AS', 'MP'];
+    usTerritories.forEach(code => {
+      expect(countryCentroids[code]).toBeDefined();
+    });
   });
 });
 
