@@ -31,7 +31,7 @@ A modern, real-time visualization of the Tor network showing relay bandwidth and
 ### Prerequisites
 
 - Node.js 20+
-- pnpm (recommended) or npm
+- npm (or pnpm/yarn)
 
 ### Development
 
@@ -41,10 +41,10 @@ git clone https://github.com/1aeo/routefluxmap.git
 cd routefluxmap
 
 # Install dependencies
-pnpm install
+npm install
 
 # Start development server
-pnpm dev
+npm run dev
 ```
 
 Visit `http://localhost:4321` to see the app.
@@ -53,10 +53,10 @@ Visit `http://localhost:4321` to see the app.
 
 ```bash
 # Build for production
-pnpm build
+npm run build
 
 # Preview production build
-pnpm preview
+npm run preview
 ```
 
 ## 🔧 Configuration
@@ -179,8 +179,7 @@ routefluxmap/
 ├── src/
 │   ├── components/      # React components
 │   │   ├── map/         # Map visualization
-│   │   ├── ui/          # UI controls
-│   │   └── layout/      # Layout components
+│   │   └── ui/          # UI controls
 │   ├── lib/             # Utilities and config
 │   ├── layouts/         # Astro layouts
 │   ├── pages/           # Routes
