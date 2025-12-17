@@ -13,14 +13,6 @@ import { config } from '../../lib/config';
 import { parseUrlHash, updateUrlHash, parseMapLocation, formatMapLocation, debounce, parseCountryCode } from '../../lib/utils/url';
 import { countryCentroids, threeToTwo, findCountryAtLocation } from '../../lib/utils/geo';
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
-
-// Transition duration for relay dot fading
-const RELAY_TRANSITION_MS = 400;
-
-// Mobile layout constants
-const MOBILE_BREAKPOINT = 640;
-const MOBILE_CONTROLS_BOTTOM = 295; // px from bottom for zoom/legend on mobile
-const MOBILE_SLIDER_BOTTOM = 85;    // px from bottom for date slider on mobile
 import { calculateNodeRadius } from '../../lib/utils/node-sizing';
 import RelayPopup from '../ui/RelayPopup';
 import DateSliderChart from '../ui/DateSliderChart';
@@ -33,6 +25,13 @@ import ParticleCanvas from './ParticleCanvas';
 import SettingsPanel from './SettingsPanel';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
+// Transition duration for relay dot fading
+const RELAY_TRANSITION_MS = 400;
+
+// Mobile layout constants
+const MOBILE_BREAKPOINT = 640;
+const MOBILE_CONTROLS_BOTTOM = 295; // px from bottom for zoom/legend on mobile
+const MOBILE_SLIDER_BOTTOM = 85;    // px from bottom for date slider on mobile
 
 const INITIAL_VIEW_STATE: MapViewState = {
   longitude: -40,
@@ -126,7 +125,6 @@ export default function TorMap() {
   // Playback interval ref (for cinema mode persistence)
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-
   // Clear hover/popup when relay layer is hidden
   const handleLayerVisibilityChange = useCallback((newVisibility: LayerVisibility) => {
     setLayerVisibility(newVisibility);
@@ -158,9 +156,6 @@ export default function TorMap() {
   
   // Track previously known dates to detect new ones
   const prevDatesRef = useRef<string[]>([]);
-
-  // Ref for the interactive map container (DOM throttling removed)
-  const interactiveContainerRef = useRef<HTMLDivElement>(null);
   
   // Ref to access DeckGL viewport for coordinate unprojection
   const deckRef = useRef<any>(null);
@@ -910,9 +905,7 @@ export default function TorMap() {
     }
     
     return result;
-  }, [filteredNodes, countryData, countryGeojson, layerVisibility, viewState.zoom, handleClick, handleHover, relayOpacity, relaySizeScale]);
-
-  const layers = baseLayers;
+  }, [filteredNodes, countryData, countryGeojson, layerVisibility, handleClick, handleHover, relayOpacity, relaySizeScale]);
 
   // Error state (only shown if no data at all)
   if (error && !relayData) {
@@ -931,7 +924,7 @@ export default function TorMap() {
   }
 
   return (
-    <div className="relative w-full h-full" ref={interactiveContainerRef}>
+    <div className="relative w-full h-full">
       {/* Startup Overlay - covers everything during initialization */}
       <StartupOverlay
         visible={initialLoading || !mapLoaded}
