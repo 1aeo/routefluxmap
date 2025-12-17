@@ -1,4 +1,12 @@
 ---
+// Self-hosted fonts via fontsource (no external CDN)
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/500.css';
+
 interface Props {
   title: string;
   description?: string;
@@ -38,11 +46,6 @@ const siteUrl = import.meta.env.PUBLIC_SITE_URL || '';
     <meta property="twitter:image" content={`${siteUrl}${image}`} />
 
     <title>{title}</title>
-    
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   </head>
   <body class="bg-tor-dark text-white antialiased">
     <slot />

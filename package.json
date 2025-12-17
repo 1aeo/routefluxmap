@@ -37,6 +37,8 @@
     "@deck.gl/core": "^9.0.0",
     "@deck.gl/layers": "^9.0.0",
     "@deck.gl/react": "^9.0.0",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "astro": "^4.16.0",
     "geoip-lite": "^1.4.10",
     "maplibre-gl": "^4.7.0",
