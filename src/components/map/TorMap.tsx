@@ -1053,9 +1053,13 @@ export default function TorMap() {
         onVisibleNodesChange={handleVisibleNodesChange}
       />
 
-      {/* Attribution - only show after loaded, hidden in cinema mode */}
-      {!initialLoading && mapLoaded && !cinemaMode && (
-        <div className="absolute bottom-1 right-0 z-50 px-1 text-[10px] bg-black/70 text-gray-400 pointer-events-auto">
+      {/* Attribution - show whenever map is visible (even in cinema mode) */}
+      {!initialLoading && mapLoaded && (
+        <div
+          className={`absolute bottom-1 right-0 z-50 px-1 text-gray-400 pointer-events-auto ${
+            cinemaMode ? 'text-[9px] bg-black/40 opacity-70' : 'text-[10px] bg-black/70'
+          }`}
+        >
           {config.attributions.map(({ name, url, prefix, suffix }, i) => (
             <span key={name}>{i > 0 && ', '}{prefix && `${prefix} `}<a href={url} target="_blank" rel="noopener" className="text-tor-green hover:underline">{name}</a>{suffix && ` ${suffix}`}</span>
           ))}
