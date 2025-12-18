@@ -24,3 +24,5 @@ Country boundaries
 - Country boundaries are based on Natural Earth vector data.
 - Natural Earth is public domain; attribution is appreciated.
 - Source: https://www.naturalearthdata.com/
+- Fallback boundaries may be loaded from https://github.com/datasets/geo-countries (ODC-PDDL-1.0),
+  pinned to commit b0b7794e15e7ec4374bf183dd73cce5b92e1c0ae (data/countries.geojson).

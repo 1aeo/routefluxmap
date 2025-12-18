@@ -161,3 +161,24 @@ consensuses-YYYY-MM.tar.xz
 | Country clients | ~1 day | 24-48 hours |
 | MaxMind DB | Weekly | 0-7 days |
 
+---
+
+## Country Boundaries: GeoJSON (Choropleth)
+
+RouteFluxMap uses a world countries polygon GeoJSON for the country choropleth layer.
+
+### Primary (bundled with the site)
+
+- **Path:** `public/data/countries.geojson` (served as `/data/countries.geojson`)
+- **Source:** Natural Earth “Admin 0 – Countries” (10m cultural vectors)
+- **Notes:** Natural Earth is public domain; attribution is appreciated.
+
+### Fallback (runtime fetch if local asset is missing)
+
+If the bundled file is unavailable, the app may fetch a pinned fallback:
+
+- **Repo:** `datasets/geo-countries`
+- **Pinned commit:** `b0b7794e15e7ec4374bf183dd73cce5b92e1c0ae`
+- **File:** `data/countries.geojson`
+- **License (dataset packaging):** ODC-PDDL-1.0 (as declared by the dataset’s `datapackage.json`)
+

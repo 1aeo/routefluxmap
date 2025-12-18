@@ -19,6 +19,7 @@ deploy/logs/
 # Ignore all files in public/data except countries.geojson (static asset)
 public/data/*
 !public/data/countries.geojson
+!public/data/countries.geojson.SOURCE.txt
 data/cache/
 data/output/
 

@@ -307,16 +307,26 @@ export default function TorMap() {
       try {
         setLoadingStatus('Loading map data...');
         // Try to load from local first, then fallback to CDN
+        const FALLBACK_GEO_COUNTRIES_COMMIT = 'b0b7794e15e7ec4374bf183dd73cce5b92e1c0ae';
+        const FALLBACK_GEO_COUNTRIES_URL = `https://raw.githubusercontent.com/datasets/geo-countries/${FALLBACK_GEO_COUNTRIES_COMMIT}/data/countries.geojson`;
+
         let response;
+        let source: 'local' | 'fallback' = 'local';
         try {
           response = await fetch('/data/countries.geojson');
           if (!response.ok) throw new Error('Local not found');
         } catch {
-          response = await fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson');
+          source = 'fallback';
+          response = await fetch(FALLBACK_GEO_COUNTRIES_URL);
         }
         
         if (response.ok) {
           const geojson = await response.json();
+          console.info(
+            `[TorMap] Loaded country boundaries from ${source}${
+              source === 'fallback' ? ` (${FALLBACK_GEO_COUNTRIES_COMMIT.slice(0, 7)})` : ''
+            }`
+          );
           
           // Normalize country codes in chunks to avoid blocking the main thread
           // This prevents requestAnimationFrame violations during loading
