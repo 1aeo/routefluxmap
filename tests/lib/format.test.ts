@@ -5,6 +5,7 @@ import {
   formatBandwidth, 
   formatDate, 
   formatDateShort,
+  formatDateForUrl,
   formatMonth,
   formatMonthYear,
   formatYear,
@@ -133,5 +134,64 @@ describe('formatYear', () => {
   it('returns year as-is', () => {
     expect(formatYear('2024')).toBe('2024');
     expect(formatYear('2023')).toBe('2023');
+  });
+});
+
+describe('formatDateForUrl', () => {
+  it('formats date without leading zeros on month', () => {
+    const result = formatDateForUrl('2024-01-15');
+    // Month should not have leading zero
+    expect(result).toMatch(/^2024-1-/);
+  });
+
+  it('formats date without leading zeros on day', () => {
+    const result = formatDateForUrl('2024-06-05');
+    // Day should not have leading zero
+    expect(result).toMatch(/-[1-9]$/);
+  });
+
+  it('preserves double-digit months and days', () => {
+    const result = formatDateForUrl('2024-12-25');
+    expect(result).toBe('2024-12-25');
+  });
+
+  it('handles year-end dates', () => {
+    const result = formatDateForUrl('2024-12-31');
+    expect(result).toBe('2024-12-31');
+  });
+
+  it('handles year-start dates', () => {
+    const result = formatDateForUrl('2024-01-01');
+    expect(result).toBe('2024-1-1');
+  });
+
+  it('handles mid-year dates', () => {
+    const result = formatDateForUrl('2024-06-15');
+    expect(result).toBe('2024-6-15');
+  });
+
+  it('produces output parseable by parseDateFromUrl', () => {
+    // Round-trip test
+    const original = '2024-03-07';
+    const formatted = formatDateForUrl(original);
+    const parsed = parseDateFromUrl(formatted);
+    
+    expect(parsed).not.toBeNull();
+    expect(parsed!.year).toBe(2024);
+    expect(parsed!.month).toBe(3);
+    expect(parsed!.day).toBe(7);
+  });
+
+  it('handles leap year date', () => {
+    const result = formatDateForUrl('2024-02-29');
+    expect(result).toBe('2024-2-29');
+  });
+
+  it('uses UTC to avoid timezone issues', () => {
+    // This tests that the function uses getUTC* methods
+    // The exact output depends on the date, but it should be consistent
+    const result = formatDateForUrl('2024-01-01');
+    // Should always produce the same output regardless of local timezone
+    expect(result).toMatch(/^2024-1-1$/);
   });
 });

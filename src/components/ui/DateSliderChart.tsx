@@ -12,6 +12,15 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { DateIndex } from '../../lib/types';
 import { formatDateShort, formatMonth, formatMonthYear, formatYear } from '../../lib/utils/format';
+import {
+  formatBandwidthGbps,
+  getMonthKey,
+  getYearKey,
+  interpolateColor,
+  aggregateByPeriod,
+  type AggregatedData,
+  type AggregationMode,
+} from '../../lib/utils/date-slider';
 
 interface DateSliderChartProps {
   dateIndex: DateIndex;
@@ -25,17 +34,6 @@ interface DateSliderChartProps {
   onPlayingChange: (playing: boolean) => void;
 }
 
-// Aggregation mode
-type AggregationMode = 'days' | 'months' | 'years';
-
-interface AggregatedData {
-  key: string;
-  label: string;
-  bandwidth: number;
-  dates: string[];
-  startDate: string;
-  endDate: string;
-}
 
 // Layout constants
 const MAX_SLIDER_WIDTH = 650;
@@ -90,83 +88,8 @@ const LocationIcon = ({ size = 3 }: { size?: number }) => (
   </svg>
 );
 
-// Format bandwidth for display
-function formatBandwidth(gbits: number): string {
-  if (gbits >= 1000) {
-    return `${(gbits / 1000).toFixed(2)} Tbps`;
-  }
-  return `${gbits.toFixed(0)} Gbps`;
-}
-
-// Get month key from date string
-function getMonthKey(dateStr: string): string {
-  return dateStr.slice(0, 7);
-}
-
-// Get year key from date string
-function getYearKey(dateStr: string): string {
-  return dateStr.slice(0, 4);
-}
-
-// Interpolate between two colors
-function interpolateColor(color1: string, color2: string, factor: number): string {
-  const c1 = parseInt(color1.slice(1), 16);
-  const c2 = parseInt(color2.slice(1), 16);
-  
-  const r1 = (c1 >> 16) & 0xff;
-  const g1 = (c1 >> 8) & 0xff;
-  const b1 = c1 & 0xff;
-  
-  const r2 = (c2 >> 16) & 0xff;
-  const g2 = (c2 >> 8) & 0xff;
-  const b2 = c2 & 0xff;
-  
-  const r = Math.round(r1 + (r2 - r1) * factor);
-  const g = Math.round(g1 + (g2 - g1) * factor);
-  const b = Math.round(b1 + (b2 - b1) * factor);
-  
-  return `rgb(${r}, ${g}, ${b})`;
-}
-
-// Generic aggregation function - reduces duplication between month/year aggregation
-function aggregateByPeriod(
-  dates: string[],
-  bandwidths: number[],
-  getKey: (date: string) => string,
-  formatLabel: (key: string) => string
-): AggregatedData[] {
-  const map = new Map<string, AggregatedData>();
-  
-  for (let i = 0; i < dates.length; i++) {
-    const date = dates[i];
-    const key = getKey(date);
-    const bw = bandwidths[i] || 0;
-    
-    let entry = map.get(key);
-    if (!entry) {
-      entry = {
-        key,
-        label: formatLabel(key),
-        bandwidth: 0,
-        dates: [],
-        startDate: date,
-        endDate: date,
-      };
-      map.set(key, entry);
-    }
-    
-    entry.bandwidth += bw;
-    entry.dates.push(date);
-    entry.endDate = date;
-  }
-  
-  // Convert sum to average
-  for (const entry of map.values()) {
-    entry.bandwidth /= entry.dates.length;
-  }
-  
-  return Array.from(map.values());
-}
+// Re-export for use in JSX (renamed to avoid conflict with format.ts version)
+const formatBandwidth = formatBandwidthGbps;
 
 // Format full date for display
 function formatFullDate(dateStr: string): string {
