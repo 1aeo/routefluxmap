@@ -1,0 +1,26 @@
+RouteFluxMap — NOTICE
+
+This product includes software and data from third parties.
+
+TorFlow (Upstream inspiration / derivative components)
+- Portions of this project are derived from and/or inspired by TorFlow.
+- TorFlow is Copyright 2015–2016 Uncharted Software Inc.
+- License: Apache License 2.0
+- Source: https://github.com/unchartedsoftware/torflow
+
+Tor network data sources
+- Relay data: Tor Project Onionoo API (https://onionoo.torproject.org/)
+- Country client statistics: Tor Metrics (https://metrics.torproject.org/)
+- Historical descriptors: Tor Collector (https://collector.torproject.org/)
+
+Geolocation
+- This product includes GeoLite2 data created by MaxMind, available from https://www.maxmind.com
+
+Map tiles / basemap
+- Basemap style and tiles provided by CARTO (https://carto.com/)
+- Map data © OpenStreetMap contributors (https://www.openstreetmap.org/copyright)
+
+Country boundaries
+- Country boundaries are based on Natural Earth vector data.
+- Natural Earth is public domain; attribution is appreciated.
+- Source: https://www.naturalearthdata.com/
