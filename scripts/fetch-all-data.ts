@@ -119,7 +119,7 @@ interface ProcessedRelayData {
   generatedAt: string;
   source: 'onionoo' | 'collector';
   geoip: {
-    provider: 'maxmind' | 'geoip-lite' | 'country-centroid';
+    provider: 'maxmind' | 'country-centroid';
     version?: string;
     buildDate?: string;
   };
@@ -219,21 +219,15 @@ const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
 // Global State
 // ============================================================================
 
-// GeoIP provider types
-type GeoLiteLookup = {
-  lookup(ip: string): { ll?: [number, number] } | null;
-};
-
 // GeoIP metadata for tracking the source and version
 interface GeoIPMetadata {
-  provider: 'maxmind' | 'geoip-lite' | 'country-centroid';
+  provider: 'maxmind' | 'country-centroid';
   version?: string;
   buildDate?: string;
   databasePath?: string;
 }
 
 let geoReader: any = null;
-let geoipLite: GeoLiteLookup | null = null;
 let geoipMetadata: GeoIPMetadata = { provider: 'country-centroid' };
 
 const status = {
@@ -342,7 +336,6 @@ function getCountryCoords(countryCode?: string): { lat: number; lng: number } {
 }
 
 function geolocateIP(ip: string): { lat: number; lng: number } | null {
-  // Try MaxMind first (more accurate, updated more frequently)
   if (geoReader) {
     try {
       const r = geoReader.get(ip);
@@ -352,26 +345,14 @@ function geolocateIP(ip: string): { lat: number; lng: number } | null {
     } catch {}
   }
   
-  // Fall back to geoip-lite
-  if (geoipLite) {
-    try {
-      const lookup = geoipLite.lookup(ip);
-      if (lookup?.ll) {
-        const [lat, lng] = lookup.ll;
-        return { lat, lng };
-      }
-    } catch {}
-  }
-  
   return null;
 }
 
 /**
- * Initialize GeoIP providers with metadata tracking.
- * Tries MaxMind first (more accurate), falls back to geoip-lite.
+ * Initialize GeoIP provider with metadata tracking.
+ * Uses MaxMind database, falls back to country centroids if unavailable.
  */
 async function initializeGeoIP(): Promise<void> {
-  // Try MaxMind first (more accurate, weekly updates available)
   if (fs.existsSync(GEOIP_DB_PATH)) {
     try {
       const maxmind = await import('maxmind');
@@ -395,42 +376,6 @@ async function initializeGeoIP(): Promise<void> {
     }
   } else {
     console.log(`  ⚠ MaxMind DB not found at ${GEOIP_DB_PATH}`);
-  }
-  
-  // Fall back to geoip-lite (less accurate but works out-of-box)
-  try {
-    const geoipModule: any = await import('geoip-lite');
-    const fallback = geoipModule?.default || geoipModule;
-    if (fallback && typeof fallback.lookup === 'function') {
-      geoipLite = fallback as GeoLiteLookup;
-      
-      // geoip-lite version comes from package.json
-      let version = 'unknown';
-      try {
-        // Try to find the geoip-lite package.json in node_modules
-        const possiblePaths = [
-          path.join(PROJECT_ROOT, 'node_modules', 'geoip-lite', 'package.json'),
-          path.join(__dirname, '..', 'node_modules', 'geoip-lite', 'package.json'),
-        ];
-        for (const pkgPath of possiblePaths) {
-          if (fs.existsSync(pkgPath)) {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-            version = pkg.version || 'unknown';
-            break;
-          }
-        }
-      } catch {}
-      
-      geoipMetadata = {
-        provider: 'geoip-lite',
-        version,
-      };
-      
-      console.log(`  ✓ geoip-lite fallback loaded (v${version})`);
-      return;
-    }
-  } catch (e: any) {
-    console.log(`  ⚠ geoip-lite fallback unavailable: ${e.message}`);
   }
   
   // No GeoIP available - will use country centroids
@@ -1916,8 +1861,7 @@ async function main() {
   console.log('    • Onionoo API      → Live relay data (last 2 days)');
   console.log('    • Collector        → Historical relay archives');
   console.log('    • Tor Metrics      → Country client estimates');
-  console.log('    • MaxMind GeoLite2 → IP geolocation (primary)');
-  console.log('    • geoip-lite       → IP geolocation (fallback)');
+  console.log('    • MaxMind GeoLite2 → IP geolocation');
   
   // Ensure directories exist
   [CACHE_DIR, OUTPUT_DIR].forEach(d => {
