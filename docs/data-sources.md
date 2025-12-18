@@ -167,6 +167,8 @@ consensuses-YYYY-MM.tar.xz
 
 RouteFluxMap uses a world countries polygon GeoJSON for the country choropleth layer.
 
+See `docs/sources/country-boundaries.md` for detailed provenance notes (including pinned fallback commit + raw URL).
+
 ### Primary (bundled with the site)
 
 - **Path:** `public/data/countries.geojson` (served as `/data/countries.geojson`)

@@ -10,6 +10,7 @@
 
 - [Data Sources](data-sources.md) - APIs and data providers
 - [Data Architecture](data-architecture.md) - JSON schema and formats
+- [Country Boundaries](sources/country-boundaries.md) - Provenance notes for choropleth boundaries
 - [Testing](testing.md) - Test guide and checklists
 
 ## Future Features
