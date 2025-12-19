@@ -1,63 +1,5 @@
 ---
 import Layout from '../layouts/Layout.astro';
-
-// Changelog data (migrated from public/data/changelog.json)
-const changelog = {
-  lastModified: 'December 6th, 2025',
-  versions: [
-    {
-      version: '2.0.0',
-      releaseDate: 'December 2025',
-      notes: [
-        'Complete rewrite using Astro + React',
-        'Replaced Express.js backend with static site generation',
-        'Replaced MySQL with pre-computed JSON on Cloudflare R2',
-        'Replaced Leaflet with MapLibre GL',
-        'Replaced custom WebGL with Deck.gl',
-        'Automated hourly data updates via local cron job',
-        'Zero server maintenance required',
-        'Improved mobile experience',
-      ],
-    },
-    {
-      version: '1.1.2',
-      releaseDate: 'May 21st, 2018',
-      notes: ['Update analytics for GDPR'],
-    },
-    {
-      version: '1.1.1',
-      releaseDate: 'June 1st, 2016',
-      notes: ['Update license'],
-    },
-    {
-      version: '1.1.0',
-      releaseDate: 'October 27th, 2015',
-      notes: [
-        'Replaced canvas rendering with WebGL rendering',
-        'Added mobile support',
-        'Removed geographic clustering by zoom level',
-        'Replaced Elasticsearch backend with MySQL',
-        'Improved ingestion pipeline to reduce memory footprint and increase render times',
-        'Added country counts for each date',
-        'Date is encoded into url for bookmarking and "jump to date" functionality',
-        'Added a global activity histogram that shows bandwidth over time',
-        'Added drilldowns for each country that show top 10 outlier days as well as a bucketed histogram over time',
-        'Improved controls for tweaking visuals (opacity, zoom, etc)',
-      ],
-    },
-    {
-      version: '1.0.0',
-      releaseDate: 'July 30th, 2015',
-      notes: [
-        'Offline map server up to zoom level 8',
-        'Clustered and unclustered mode for relays',
-        'Ability to toggle between all traffic, hidden services, or all traffic without hidden services',
-        'Toggle labels without reloading all tiles',
-        'Toggle bandwidth scaling in unclustered mode',
-      ],
-    },
-  ],
-};
 ---
 
 <Layout title="About RouteFluxMap">
@@ -86,22 +28,15 @@ const changelog = {
     <div class="max-w-4xl mx-auto px-6 py-12">
       <!-- Introduction -->
       <section class="mb-16">
-        <h2 class="text-2xl font-semibold text-white mb-6">Data Flow in the Tor Network</h2>
+        <h2 class="text-2xl font-semibold text-white mb-6">Tor Network Visualization</h2>
         <div class="prose prose-invert prose-lg">
           <p class="text-gray-300 leading-relaxed mb-4">
-            The Tor network is a group of volunteer-operated servers (relays) that allows people to improve their privacy and
-            security on the Internet. Tor's users employ this network by connecting through a series of virtual tunnels
-            rather than making a direct connection, thus allowing both organizations and individuals to share information
-            over public networks without compromising their privacy.
-            <a href="https://www.torproject.org/about/overview.html.en" target="_blank" rel="noopener" class="text-tor-blue hover:underline"><sup>[1]</sup></a>
-          </p>
-          <p class="text-gray-300 leading-relaxed mb-4">
-            The following visualization shows information flow between relay servers for a selected day.
+            This visualization shows relay activity across the Tor network, updated hourly from official Tor Project data.
           </p>
           <ul class="text-gray-300 space-y-2 list-disc list-inside">
-            <li>Each <strong class="text-white">circle</strong> represents the aggregated bandwidth of relay servers grouped by proximity. Hover over a circle to see information about that group.</li>
-            <li>Each <strong class="text-white">colored country</strong> represents a country that is responsible for the top N client connections. Click on the country to display the distribution by time and the outlier counts.</li>
-            <li>Use the <strong class="text-white">date slider</strong> to select the simulation date.</li>
+            <li>Each <strong class="text-white">circle</strong> represents relay servers grouped by location. Click to see bandwidth and relay details.</li>
+            <li>Each <strong class="text-white">colored country</strong> shows top client connection sources.</li>
+            <li>Use the <strong class="text-white">date slider</strong> to explore historical data.</li>
           </ul>
         </div>
       </section>
@@ -110,9 +45,9 @@ const changelog = {
       <section class="mb-16">
         <h2 class="text-2xl font-semibold text-white mb-6">Technology</h2>
         <div class="grid md:grid-cols-2 gap-6">
-          <div class="bg-white/5 rounded-lg p-6 border border-white/10">
+          <div class="bg-white/10 rounded-lg p-6 border border-white/20">
             <h3 class="text-lg font-medium text-white mb-3">Frontend</h3>
-            <ul class="text-gray-400 space-y-1 text-sm">
+            <ul class="text-gray-200 space-y-1 text-sm">
               <li>• Astro (Static Site Generator)</li>
               <li>• React (Interactive Components)</li>
               <li>• Deck.gl (WebGL Visualization)</li>
@@ -120,79 +55,16 @@ const changelog = {
               <li>• Tailwind CSS (Styling)</li>
             </ul>
           </div>
-          <div class="bg-white/5 rounded-lg p-6 border border-white/10">
+          <div class="bg-white/10 rounded-lg p-6 border border-white/20">
             <h3 class="text-lg font-medium text-white mb-3">Infrastructure</h3>
-            <ul class="text-gray-400 space-y-1 text-sm">
+            <ul class="text-gray-200 space-y-1 text-sm">
               <li>• Cloudflare Pages (Hosting)</li>
-              <li>• Cloudflare R2 (Data Storage)</li>
+              <li>• Cloud Storage (R2 / DO Spaces)</li>
               <li>• Local Cron (Data Pipeline)</li>
               <li>• MaxMind GeoIP (Geolocation)</li>
               <li>• Tor Onionoo API (Data Source)</li>
             </ul>
           </div>
-        </div>
-      </section>
-
-      <!-- Data Sources -->
-      <section class="mb-16">
-        <h2 class="text-2xl font-semibold text-white mb-6">Data Sources</h2>
-        <div class="bg-white/5 rounded-lg p-6 border border-white/10">
-          <p class="text-gray-300 mb-4">
-            Relay data is fetched hourly from the official
-            <a href="https://onionoo.torproject.org/" target="_blank" rel="noopener" class="text-tor-blue hover:underline">Tor Onionoo API</a>.
-            IP geolocation is performed using the MaxMind GeoLite2-City database.
-          </p>
-          <p class="text-gray-400 text-sm">
-            This product includes GeoLite2 data created by MaxMind, available from
-            <a href="https://www.maxmind.com" target="_blank" rel="noopener" class="text-tor-blue hover:underline">https://www.maxmind.com</a>.
-          </p>
-        </div>
-      </section>
-
-      <!-- Changelog -->
-      <section class="mb-16">
-        <h2 class="text-2xl font-semibold text-white mb-6">Changelog</h2>
-        <p class="text-gray-400 text-sm mb-6">Last modified: {changelog.lastModified}</p>
-        <div class="space-y-8">
-          {changelog.versions.map((version) => (
-            <div class="relative pl-6 border-l-2 border-tor-purple/50">
-              <div class="absolute -left-2 top-0 w-4 h-4 rounded-full bg-tor-purple"></div>
-              <div class="mb-2">
-                <span class="text-white font-semibold text-lg">v{version.version}</span>
-                <span class="text-gray-500 ml-3 text-sm">{version.releaseDate}</span>
-              </div>
-              <ul class="text-gray-400 space-y-1 text-sm">
-                {version.notes.map((note) => (
-                  <li>• {note}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <!-- Credits -->
-      <section class="mb-16">
-        <h2 class="text-2xl font-semibold text-white mb-6">Credits</h2>
-        <div class="bg-white/5 rounded-lg p-6 border border-white/10">
-          <p class="text-gray-300 mb-4">
-            Originally created by <a href="https://uncharted.software" target="_blank" rel="noopener" class="text-tor-blue hover:underline">Uncharted Software</a> in 2015.
-          </p>
-          <p class="text-gray-300">
-            Modernized and maintained by the RouteFluxMap community. 
-            <a href="https://github.com/1aeo/routefluxmap" target="_blank" rel="noopener" class="text-tor-blue hover:underline">View source on GitHub</a>.
-          </p>
-        </div>
-      </section>
-
-      <!-- License -->
-      <section>
-        <h2 class="text-2xl font-semibold text-white mb-6">License</h2>
-        <div class="bg-white/5 rounded-lg p-6 border border-white/10">
-          <p class="text-gray-300">
-            This project is licensed under the
-            <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noopener" class="text-tor-blue hover:underline">Apache License 2.0</a>.
-          </p>
         </div>
       </section>
     </div>
