@@ -36,7 +36,7 @@ const MOBILE_SLIDER_BOTTOM = 85;    // px from bottom for date slider on mobile
 const INITIAL_VIEW_STATE: MapViewState = {
   longitude: -40,
   latitude: 30,
-  zoom: 3,
+  zoom: 2,
   pitch: 0,
   bearing: 0,
 };
