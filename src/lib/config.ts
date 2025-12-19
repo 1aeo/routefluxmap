@@ -144,10 +144,12 @@ export function getRelayMetricsUrl(fingerprint: string): string {
     .replace(/[$:\s-]/g, '')
     .toUpperCase();
   
-  // Validate: must be exactly 40 hex characters
+  // Strict validation: must be exactly 40 hex characters
+  // This prevents any path traversal or injection attacks
   if (!/^[0-9A-F]{40}$/.test(cleanFingerprint)) {
     console.warn(`Invalid fingerprint format: ${fingerprint}`);
-    // Still return the URL, but the metrics site will handle the error
+    // Return safe fallback URL - metrics site will show "not found"
+    return `${config.metricsUrl}/relay/0000000000000000000000000000000000000000`;
   }
   
   return `${config.metricsUrl}/relay/${cleanFingerprint}`;

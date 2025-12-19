@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
 import { ScatterplotLayer } from '@deck.gl/layers';
+import { FlyToInterpolator } from '@deck.gl/core';
 import { Map } from 'react-map-gl/maplibre';
 import type { MapViewState, PickingInfo } from '@deck.gl/core';
 import type { AggregatedNode, RelayData, DateIndex, LayerVisibility, CountryHistogram } from '../../lib/types';
@@ -15,6 +16,7 @@ import { countryCentroids, threeToTwo, findCountryAtLocation } from '../../lib/u
 import { fetchWithFallback } from '../../lib/utils/data-fetch';
 import { calculateNodeRadius } from '../../lib/utils/node-sizing';
 import RelayPopup from '../ui/RelayPopup';
+import RelaySearch from '../ui/RelaySearch';
 import DateSliderChart from '../ui/DateSliderChart';
 import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
@@ -43,6 +45,16 @@ const INITIAL_VIEW_STATE: MapViewState = {
 
 // Default zoom level when centering on a country
 const COUNTRY_ZOOM = 5;
+
+// Focus relay zoom constants
+const FOCUS_ZOOM_MIN = 6;
+const FOCUS_ZOOM_MAX = 10;
+const FLY_TO_DURATION_MS = 1000;
+
+// Focus ring styling
+const FOCUS_RING_COLOR: [number, number, number, number] = [255, 255, 0, 200];
+const FOCUS_RING_RADIUS_PX = 24;
+const FOCUS_RING_LINE_WIDTH = 3;
 
 // Get initial view state from URL or use defaults
 function getInitialViewState(): MapViewState {
@@ -127,6 +139,11 @@ export default function TorMap() {
   
   // Playback interval ref (for cinema mode persistence)
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Focus state for relay search
+  const [focusedNode, setFocusedNode] = useState<AggregatedNode | null>(null);
+  const [focusedFingerprint, setFocusedFingerprint] = useState<string | null>(null);
+  const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clear hover/popup when relay layer is hidden
   const handleLayerVisibilityChange = useCallback((newVisibility: LayerVisibility) => {
@@ -549,9 +566,15 @@ export default function TorMap() {
   // Handle date change from slider
   const handleDateChange = useCallback((date: string) => {
     setCurrentDate(date);
-    // Close any open popups when date changes
+    // Close any open popups and clear focus when date changes
     setSelectedNode(null);
     setPopupPosition(null);
+    setFocusedNode(null);
+    setFocusedFingerprint(null);
+    if (focusTimeoutRef.current) {
+      clearTimeout(focusTimeoutRef.current);
+      focusTimeoutRef.current = null;
+    }
   }, []);
 
   // Track current date in ref for playback interval (avoids recreating interval on every date change)
@@ -682,11 +705,17 @@ export default function TorMap() {
     }
   }, [hoverInfo]);
 
-  // Close popup
+  // Close popup and clear focus state
   const handleClosePopup = useCallback(() => {
     setSelectedNode(null);
     setPopupPosition(null);
     setSelectedCountryName(null);
+    setFocusedNode(null);
+    setFocusedFingerprint(null);
+    if (focusTimeoutRef.current) {
+      clearTimeout(focusTimeoutRef.current);
+      focusTimeoutRef.current = null;
+    }
   }, []);
 
   // Handle background click to close popup
@@ -695,6 +724,58 @@ export default function TorMap() {
       handleClosePopup();
     }
   }, [handleClosePopup]);
+
+  // Focus on a specific relay (from search)
+  const focusRelay = useCallback((nodeIndex: number, relayIndex: number, fingerprint: string) => {
+    const nodes = relayData?.nodes;
+    if (!nodes || nodeIndex >= nodes.length) return;
+    
+    const node = nodes[nodeIndex];
+    if (relayIndex >= node.relays.length) return;
+
+    // Clear any pending focus timeout
+    if (focusTimeoutRef.current) {
+      clearTimeout(focusTimeoutRef.current);
+      focusTimeoutRef.current = null;
+    }
+
+    // 1. Override filters to ensure relay is visible
+    setLayerVisibility(prev => ({ ...prev, relays: true }));
+    setPathMode('city');
+    setFilterRelaysByTraffic(false);
+
+    // 2. Fly to location with animation (zoom clamped in updater to avoid dependency)
+    setViewState(prev => ({
+      ...prev,
+      longitude: node.lng,
+      latitude: node.lat,
+      zoom: Math.max(FOCUS_ZOOM_MIN, Math.min(FOCUS_ZOOM_MAX, prev.zoom)),
+      transitionDuration: FLY_TO_DURATION_MS,
+      transitionInterpolator: new FlyToInterpolator(),
+    }));
+
+    // 4. Set focus state immediately (for focus ring)
+    setFocusedNode(node);
+    setFocusedFingerprint(fingerprint);
+
+    // 5. Open popup after fly-to completes
+    focusTimeoutRef.current = setTimeout(() => {
+      setSelectedNode(node);
+      
+      // Find country name
+      if (countryGeojson) {
+        const country = findCountryAtLocation(node.lng, node.lat, countryGeojson);
+        setSelectedCountryName(country?.name ?? null);
+      }
+      
+      // Project node coords to screen position
+      const viewport = deckRef.current?.deck?.getViewports()[0];
+      if (viewport) {
+        const [x, y] = viewport.project([node.lng, node.lat]);
+        setPopupPosition({ x, y });
+      }
+    }, FLY_TO_DURATION_MS);
+  }, [relayData, countryGeojson]);
 
   // Update country tooltip DOM directly (no React state) for zero lag
   const updateCountryTooltip = useCallback((code: string | null, x: number, y: number) => {
@@ -931,8 +1012,29 @@ export default function TorMap() {
       );
     }
     
+    // Focus ring layer (highlights selected relay from search)
+    if (focusedNode) {
+      result.push(
+        new ScatterplotLayer({
+          id: 'relay-focus-ring',
+          data: [focusedNode],
+          pickable: false,
+          filled: false,
+          stroked: true,
+          radiusUnits: 'pixels',
+          getPosition: (d: AggregatedNode) => [d.lng, d.lat],
+          getRadius: FOCUS_RING_RADIUS_PX,
+          getLineColor: FOCUS_RING_COLOR,
+          lineWidthMinPixels: FOCUS_RING_LINE_WIDTH,
+          updateTriggers: {
+            data: [focusedNode],
+          },
+        })
+      );
+    }
+    
     return result;
-  }, [filteredNodes, countryData, countryGeojson, layerVisibility, handleClick, handleHover, relayOpacity, relaySizeScale]);
+  }, [filteredNodes, countryData, countryGeojson, layerVisibility, handleClick, handleHover, relayOpacity, relaySizeScale, focusedNode]);
 
   // WebGL error state - shown if WebGL2 is not available (common in Tor Browser)
   if (webglError) {
@@ -1120,6 +1222,7 @@ export default function TorMap() {
           x={popupPosition.x}
           y={popupPosition.y}
           onClose={handleClosePopup}
+          highlightFingerprint={focusedFingerprint}
         />
       )}
 
@@ -1164,6 +1267,17 @@ export default function TorMap() {
               compact={true}
             />
           </div>
+        </div>
+      )}
+
+      {/* Relay Search - top right, left of the info button */}
+      {!cinemaMode && (
+        <div className={`absolute top-4 z-10 ${isMobile ? 'left-4 right-14' : 'right-16 w-72'}`}>
+          <RelaySearch
+            nodes={relayData?.nodes ?? []}
+            onSelectRelay={focusRelay}
+            disabled={!hasRelayNodes || loading}
+          />
         </div>
       )}
 
