@@ -144,6 +144,11 @@ export function searchRelays(
   }
 
   const queryLower = query.toLowerCase().trim();
+  
+  // Check trimmed length - whitespace-only queries should return no results
+  if (queryLower.length < MIN_QUERY_LENGTH) {
+    return [];
+  }
   const queryClean = cleanFingerprint(query);
   const queryCleanLen = queryClean.length;
   const isFingerprintQuery = isLikelyFingerprint(queryClean);
