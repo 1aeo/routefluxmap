@@ -47,6 +47,7 @@ import DateSliderChart from '../ui/DateSliderChart';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
 import StartupOverlay from '../ui/StartupOverlay';
+import KeyboardShortcutsHelp from '../ui/KeyboardShortcutsHelp';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 // Mobile layout constants
@@ -125,6 +126,7 @@ export default function TorMap() {
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cinemaMode, setCinemaMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [windowSize, setWindowSize] = useState({ width: 800, height: 600 });
 
   // Track window size for particle canvas
@@ -159,13 +161,31 @@ export default function TorMap() {
     dates: dateIndex?.dates ?? [],
     currentDate,
     onDateChange: (date) => {
-    setCurrentDate(date);
+      setCurrentDate(date);
       relaySelection.clearAll();
     },
-    isPlaying: playback.isPlaying,
     onTogglePlay: playback.togglePlay,
-    cinemaMode,
     onToggleCinemaMode: () => setCinemaMode((prev) => !prev),
+    onToggleLayer: (layer) => {
+      handleVisibilityChange({ ...visibility, [layer]: !visibility[layer] });
+    },
+    onToggleSettings: () => setShowSettings((prev) => !prev),
+    onShowHelp: () => setShowKeyboardHelp(true),
+    onZoom: (delta) => {
+      setViewState((prev: typeof viewState) => ({
+        ...prev,
+        zoom: Math.max(1, Math.min(18, prev.zoom + delta)),
+      }));
+    },
+    onClose: () => {
+      if (showKeyboardHelp) {
+        setShowKeyboardHelp(false);
+      } else if (showSettings) {
+        setShowSettings(false);
+      } else if (relaySelection.selectedNode) {
+        relaySelection.closePopup();
+      }
+    },
   });
 
   // Deck.gl ref for viewport projection
@@ -592,6 +612,7 @@ export default function TorMap() {
         onToggleSettings={() => setShowSettings((prev) => !prev)}
         cinemaMode={cinemaMode}
         onToggleCinemaMode={() => setCinemaMode((prev) => !prev)}
+        onShowKeyboardHelp={() => setShowKeyboardHelp(true)}
         pathMode={particleSettings.pathMode}
         setPathMode={particleSettings.setPathMode}
         trafficType={particleSettings.trafficType}
@@ -615,6 +636,11 @@ export default function TorMap() {
           <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-tor-green" />
           <span className="text-tor-green text-xs">Loading...</span>
         </div>
+      )}
+
+      {/* Keyboard Shortcuts Help Modal */}
+      {showKeyboardHelp && (
+        <KeyboardShortcutsHelp onClose={() => setShowKeyboardHelp(false)} />
       )}
     </div>
   );

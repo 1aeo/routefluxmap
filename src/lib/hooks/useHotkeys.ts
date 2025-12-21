@@ -6,6 +6,11 @@
  * - Left/Right arrows: Navigate dates
  * - Space: Toggle playback
  * - Home/End: Jump to first/last date
+ * - +/-: Zoom in/out
+ * - C/R/P: Toggle countries/relays/particles layers
+ * - S: Toggle settings panel
+ * - ?: Show keyboard shortcuts help
+ * - Escape: Close modals/popups
  */
 
 import { useEffect } from 'react';
@@ -18,14 +23,20 @@ export interface UseHotkeysOptions {
   currentDate: string | null;
   /** Callback to change date */
   onDateChange: (date: string) => void;
-  /** Whether playback is active */
-  isPlaying: boolean;
   /** Callback to toggle playback */
   onTogglePlay: () => void;
-  /** Whether cinema mode is active */
-  cinemaMode: boolean;
   /** Callback to toggle cinema mode */
   onToggleCinemaMode: () => void;
+  /** Callback to toggle layer visibility */
+  onToggleLayer?: (layer: 'relays' | 'countries' | 'particles') => void;
+  /** Callback to toggle settings panel */
+  onToggleSettings?: () => void;
+  /** Callback to show keyboard help */
+  onShowHelp?: () => void;
+  /** Callback to zoom */
+  onZoom?: (delta: number) => void;
+  /** Callback to close (Escape key) */
+  onClose?: () => void;
 }
 
 /**
@@ -38,10 +49,13 @@ export function useHotkeys(options: UseHotkeysOptions): void {
     dates,
     currentDate,
     onDateChange,
-    isPlaying,
     onTogglePlay,
-    cinemaMode,
     onToggleCinemaMode,
+    onToggleLayer,
+    onToggleSettings,
+    onShowHelp,
+    onZoom,
+    onClose,
   } = options;
 
   useEffect(() => {
@@ -65,11 +79,13 @@ export function useHotkeys(options: UseHotkeysOptions): void {
       };
 
       switch (e.key) {
+        // Cinema mode
         case 'h':
         case 'H':
           onToggleCinemaMode();
           break;
 
+        // Date navigation
         case 'ArrowLeft':
           if (dates.length > 0 && currentIdx > 0) {
             navigateTo(dates[currentIdx - 1]);
@@ -82,6 +98,7 @@ export function useHotkeys(options: UseHotkeysOptions): void {
           }
           break;
 
+        // Playback
         case ' ':
           e.preventDefault();
           onTogglePlay();
@@ -100,11 +117,54 @@ export function useHotkeys(options: UseHotkeysOptions): void {
             navigateTo(dates[dates.length - 1]);
           }
           break;
+
+        // Layer toggles
+        case 'c':
+        case 'C':
+          onToggleLayer?.('countries');
+          break;
+
+        case 'r':
+        case 'R':
+          onToggleLayer?.('relays');
+          break;
+
+        case 'p':
+        case 'P':
+          onToggleLayer?.('particles');
+          break;
+
+        // Settings panel
+        case 's':
+        case 'S':
+          onToggleSettings?.();
+          break;
+
+        // Help
+        case '?':
+          onShowHelp?.();
+          break;
+
+        // Zoom
+        case '+':
+        case '=':
+          onZoom?.(1);
+          break;
+
+        case '-':
+        case '_':
+          onZoom?.(-1);
+          break;
+
+        // Close/Escape
+        case 'Escape':
+          onClose?.();
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [dates, currentDate, onDateChange, isPlaying, onTogglePlay, cinemaMode, onToggleCinemaMode]);
+  }, [dates, currentDate, onDateChange, onTogglePlay, onToggleCinemaMode, onToggleLayer, onToggleSettings, onShowHelp, onZoom, onClose]);
 }
 
