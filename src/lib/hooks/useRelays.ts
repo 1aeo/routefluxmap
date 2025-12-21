@@ -255,12 +255,15 @@ export function useRelays(options: UseRelaysOptions = {}): UseRelaysResult {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, [dateIndex]);
 
-  // Fetch relay data when date changes (with cache check)
+  // Fetch relay data when date changes (with cache check and staleness detection)
   useEffect(() => {
     if (!currentDate || !dateIndex) return;
 
-    const dates = dateIndex.dates;
-    const currentIdx = dates.indexOf(currentDate);
+    // Track staleness - set to true by cleanup when effect re-runs
+    let stale = false;
+
+    // O(1) lookup using precomputed map
+    const currentIdx = dateIndexMap.get(currentDate) ?? -1;
     if (currentIdx < 0) return;
 
     // Check cache first
@@ -276,27 +279,43 @@ export function useRelays(options: UseRelaysOptions = {}): UseRelaysResult {
     setLoading(true);
     setLoadingStatus('Downloading relay data...');
     
-    const onProgress = (p: number) => setLoadingProgress(30 + p * 40);
+    const onProgress = (p: number) => {
+      if (!stale) setLoadingProgress(30 + p * 40);
+    };
 
     fetchRelayJson(currentDate, { onProgress })
       .then(result => {
+        // Always cache - data is valid for this date and useful for future playback
+        cacheRef.current.set(currentDate, result.data);
+        
+        // Only update UI if we're still displaying this date
+        if (stale) return;
+        
         if (result.source === 'fallback') {
           console.info(`[useRelays] Using fallback for relay data ${currentDate}`);
         }
         setLoadingStatus('Processing data...');
-        cacheRef.current.set(currentDate, result.data);
         setRelayData(result.data);
         setLoadingProgress(prev => Math.max(prev, 70));
         setError(null);
       })
       .catch((err: any) => {
+        // Don't show errors for dates we've moved past
+        if (stale) return;
         setError(err.message);
       })
       .finally(() => {
+        // Don't update loading state for stale requests
+        if (stale) return;
         setLoading(false);
         setInitialLoading(false);
       });
-  }, [currentDate, dateIndex]);
+
+    // Cleanup: mark as stale when currentDate changes or component unmounts
+    return () => {
+      stale = true;
+    };
+  }, [currentDate, dateIndex, dateIndexMap]);
 
   // Preload adjacent dates when date or playback state changes
   useEffect(() => {
