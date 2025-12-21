@@ -196,6 +196,8 @@ describe('useRelays', () => {
       (global.fetch as any)
         .mockResolvedValueOnce(mockFetchResponse(dateIndex))
         .mockResolvedValueOnce(mockFetchResponse(mockRelayData()))
+        // Preload of adjacent date after relay data loads
+        .mockResolvedValueOnce(mockFetchResponse(mockRelayData({ published: '2024-01-14' })))
         // Refresh call
         .mockResolvedValueOnce(mockFetchResponse(dateIndex));
 
@@ -224,6 +226,8 @@ describe('useRelays', () => {
       (global.fetch as any)
         .mockResolvedValueOnce(mockFetchResponse(dateIndex1))
         .mockResolvedValueOnce(mockFetchResponse(mockRelayData()))
+        // Preload of adjacent date (2024-01-14) after relay data loads
+        .mockResolvedValueOnce(mockFetchResponse(mockRelayData({ published: '2024-01-14' })))
         // Refresh call returns updated index
         .mockResolvedValueOnce(mockFetchResponse(dateIndex2));
 

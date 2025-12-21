@@ -26,7 +26,6 @@ import {
   useHotkeys,
   useWebGL,
   useIsMobile,
-  useRelayFade,
   FLY_TO_DURATION_MS,
 } from '../../lib/hooks';
 
@@ -63,7 +62,11 @@ export default function TorMap() {
   // Device detection
   const { isMobile } = useIsMobile();
 
-  // Data hooks
+  // Playback state (lifted up to pass to useRelays for adaptive preloading)
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+
+  // Data hooks (with adaptive preloading based on playback state)
   const {
     relayData,
     dateIndex,
@@ -76,7 +79,7 @@ export default function TorMap() {
     setCurrentDate,
     refresh,
     relayStats,
-  } = useRelays();
+  } = useRelays({ isPlaying, playbackSpeed });
 
   const { countryGeojson, countryData } = useCountryGeo(currentDate);
 
@@ -106,21 +109,8 @@ export default function TorMap() {
   // Particle settings
   const particleSettings = useParticleSettings();
 
-  // Relay fade transition
-  const { relayOpacity, startTransition } = useRelayFade();
-  const prevRelayDataRef = useRef<typeof relayData>(null);
-
-  // Trigger fade when relay data changes
-  useEffect(() => {
-    if (
-      relayData &&
-      prevRelayDataRef.current &&
-      prevRelayDataRef.current.published !== relayData.published
-    ) {
-      startTransition();
-    }
-    prevRelayDataRef.current = relayData;
-  }, [relayData, startTransition]);
+  // Relay opacity (constant - no fade transition for easier day-to-day comparison)
+  const relayOpacity = 1;
 
   // UI state
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -146,7 +136,7 @@ export default function TorMap() {
     }
   }, [cinemaMode, showSettings]);
   
-  // Playback
+  // Playback (uses lifted state for adaptive preloading)
   const playback = useDatePlayback({
     dates: dateIndex?.dates ?? [],
     currentDate,
@@ -154,6 +144,10 @@ export default function TorMap() {
       setCurrentDate(date);
       relaySelection.clearAll();
     },
+    isPlaying,
+    setIsPlaying,
+    playbackSpeed,
+    setPlaybackSpeed,
   });
 
   // Keyboard shortcuts
