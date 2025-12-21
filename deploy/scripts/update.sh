@@ -217,6 +217,16 @@ run_uploads() {
     fi
 }
 
+# Backfill empty country files (Tor Metrics has ~3 day delay)
+run_backfill() {
+    log "🔄 Checking for country data to backfill..."
+    if npx tsx scripts/fetch-all-data.ts --backfill-countries; then
+        log "✅ Country backfill completed"
+    else
+        log "⚠️ Country backfill had issues (non-fatal)"
+    fi
+}
+
 log "════════════════════════════════════════════════════════════════"
 log "  RouteFluxMap Data Update"
 log "════════════════════════════════════════════════════════════════"
@@ -325,6 +335,8 @@ if [[ "$RUN_MODE" == "year" ]]; then
         log "✅ All quarters completed successfully"
     fi
     
+    run_backfill
+    
     # Final upload
     FINAL_COUNT=$(get_date_count)
     TOTAL_NEW=$((FINAL_COUNT - INITIAL_COUNT))
@@ -342,6 +354,7 @@ elif [[ "$UPLOAD_INTERVAL" -eq 0 ]]; then
         exit 1
     fi
     
+    run_backfill
     run_uploads "Uploading to storage"
 else
     # Incremental mode: fetch in background, upload periodically
@@ -384,6 +397,8 @@ else
         log "❌ Data fetch failed (exit $FETCH_EXIT)"
         exit 1
     fi
+    
+    run_backfill
     
     # Final upload (catches any remaining files)
     FINAL_COUNT=$(get_date_count)

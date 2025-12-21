@@ -24,6 +24,7 @@
  *   npx tsx scripts/fetch-all-data.ts --parallel=5 # Control day concurrency
  *   npx tsx scripts/fetch-all-data.ts --threads=4  # XZ decompression threads (default: 4)
  *   npx tsx scripts/fetch-all-data.ts --geoip=/path/to/GeoLite2-City.mmdb
+ *   npx tsx scripts/fetch-all-data.ts --backfill-countries  # Re-fetch empty country files
  * 
  * Resource Requirements (for historical data processing):
  *   --threads=1: ~4GB RAM (slowest, minimum memory)
@@ -75,6 +76,15 @@ const COUNTRY_FETCH_TIMEOUT_MS = 180000; // 3 min timeout for country data (API 
 
 // Concurrency limits
 const MAX_COUNTRY_FETCH_CONCURRENCY = 6;  // Max concurrent country data fetches
+
+// Tor Metrics country client data availability
+// The userstats-relay-country endpoint only has data starting from this date
+// Before Sep 1, 2011, country-level client estimates were not collected
+const COUNTRY_STATS_FIRST_DATE = '2011-09-01';
+
+// Backfill configuration
+// Tor Metrics API publishes data with approximately a 3-day delay
+const COUNTRY_STATS_DELAY_DAYS = 3;
 
 // ============================================================================
 // Types
@@ -1781,6 +1791,124 @@ async function processDate(dateStr: string): Promise<void> {
 }
 
 // ============================================================================
+// Country Data Backfill
+// ============================================================================
+
+/**
+ * Scan for country files that have empty data (totalUsers: 0 or empty countries).
+ * Returns dates that are eligible for backfill:
+ * - After COUNTRY_STATS_FIRST_DATE (2011-09-01)
+ * - Older than COUNTRY_STATS_DELAY_DAYS (data should now be available)
+ * 
+ * Optimization: Uses file size as a fast pre-filter. Empty country files are
+ * typically ~130 bytes, while populated files are 4-6KB+.
+ */
+function scanEmptyCountryFiles(): string[] {
+  if (!fs.existsSync(OUTPUT_DIR)) return [];
+  
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - COUNTRY_STATS_DELAY_DAYS);
+  const cutoffDateStr = cutoffDate.toISOString().slice(0, 10);
+  
+  // Size threshold: files under 200 bytes are likely empty
+  const EMPTY_FILE_THRESHOLD = 200;
+  
+  return fs.readdirSync(OUTPUT_DIR)
+    .filter(f => f.startsWith('countries-') && f.endsWith('.json'))
+    .map(file => {
+      const match = file.match(/^countries-(\d{4}-\d{2}-\d{2})\.json$/);
+      if (!match) return null;
+      
+      const dateStr = match[1];
+      
+      // Quick date range check (string comparison works for ISO dates)
+      if (dateStr < COUNTRY_STATS_FIRST_DATE || dateStr > cutoffDateStr) return null;
+      
+      // Fast size check - skip files that are clearly populated
+      const filePath = path.join(OUTPUT_DIR, file);
+      const size = fs.statSync(filePath).size;
+      if (size > EMPTY_FILE_THRESHOLD) return null;
+      
+      // Only parse small files to confirm they're empty
+      try {
+        const data: CountryData = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (data.totalUsers === 0 || Object.keys(data.countries).length === 0) {
+          return dateStr;
+        }
+      } catch { /* skip unparseable files */ }
+      
+      return null;
+    })
+    .filter((d): d is string => d !== null)
+    .sort();
+}
+
+/**
+ * Backfill country data for dates that were previously empty.
+ * Only fetches country data, skips relay data (which should already exist).
+ */
+async function runCountryBackfill(): Promise<void> {
+  console.log('  Mode: Country Data Backfill\n');
+  console.log('  Scanning for empty country files...\n');
+  
+  const emptyDates = scanEmptyCountryFiles();
+  
+  if (emptyDates.length === 0) {
+    console.log('  ✓ No empty country files found that are eligible for backfill.\n');
+    console.log('  Eligibility criteria:');
+    console.log(`    • Date >= ${COUNTRY_STATS_FIRST_DATE} (Tor Metrics data start)`);
+    console.log(`    • Date <= ${COUNTRY_STATS_DELAY_DAYS} days ago (API publishing delay)\n`);
+    return;
+  }
+  
+  console.log(`  Found ${emptyDates.length} empty country file(s) to backfill:\n`);
+  for (const date of emptyDates) {
+    console.log(`    • ${date}`);
+  }
+  console.log('');
+  
+  // Process each date
+  let success = 0;
+  let failed = 0;
+  
+  for (const dateStr of emptyDates) {
+    const countryPath = path.join(OUTPUT_DIR, `countries-${dateStr}.json`);
+    
+    try {
+      console.log(`  ▶ Fetching country data for ${dateStr}...`);
+      
+      // Use daily fetch (more reliable for single dates)
+      const countryData = await withRetry(
+        () => fetchDailyCountryDataOnce(dateStr),
+        `Country data ${dateStr}`,
+        2
+      );
+      
+      // Check if we got actual data
+      if (countryData.totalUsers === 0 || Object.keys(countryData.countries).length === 0) {
+        console.log(`    ⚠ Still no data available for ${dateStr}`);
+        failed++;
+        continue;
+      }
+      
+      // Write the updated file
+      fs.writeFileSync(countryPath, JSON.stringify(countryData, null, 2));
+      console.log(`    ✓ Backfilled ${dateStr} (${Object.keys(countryData.countries).length} countries, ${countryData.totalUsers.toLocaleString()} users)`);
+      success++;
+    } catch (e: any) {
+      console.log(`    ✗ Failed to backfill ${dateStr}: ${e.message}`);
+      failed++;
+    }
+  }
+  
+  console.log('\n════════════════════════════════════════════════════════════════════');
+  console.log('  Backfill Summary:');
+  console.log(`    ✓ Success: ${success}`);
+  console.log(`    ✗ Failed:  ${failed}`);
+  console.log('════════════════════════════════════════════════════════════════════\n');
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1793,6 +1921,7 @@ async function main() {
   const args = process.argv.slice(2);
   let dateRange: DateRange;
   let parallelOverride: number | null = null;
+  let backfillCountries = false;
   
   // Extract options
   for (const arg of args) {
@@ -1805,7 +1934,15 @@ async function main() {
       }
     } else if (arg.startsWith('--geoip=')) {
       GEOIP_DB_PATH = arg.slice(8);
+    } else if (arg === '--backfill-countries') {
+      backfillCountries = true;
     }
+  }
+  
+  // Handle backfill mode
+  if (backfillCountries) {
+    await runCountryBackfill();
+    return;
   }
   
   // Parse date range
