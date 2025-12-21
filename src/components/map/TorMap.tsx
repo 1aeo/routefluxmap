@@ -22,6 +22,7 @@ import LayerControls from '../ui/LayerControls';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
 import StartupOverlay from '../ui/StartupOverlay';
+import KeyboardShortcutsHelp from '../ui/KeyboardShortcutsHelp';
 import { createCountryLayer, CountryTooltip } from './CountryLayer';
 import ParticleCanvas from './ParticleCanvas';
 import SettingsPanel from './SettingsPanel';
@@ -127,6 +128,7 @@ export default function TorMap() {
   const [trafficType, setTrafficType] = useState<'all' | 'hidden' | 'general'>('all'); // Default to all traffic
   const [pathMode, setPathMode] = useState<'city' | 'country'>('city'); // City or Country path mode
   const [cinemaMode, setCinemaMode] = useState(false); // Hide UI for presentation mode
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false); // Keyboard shortcuts help modal
   
   // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
@@ -581,6 +583,10 @@ export default function TorMap() {
   const currentDateRef = useRef(currentDate);
   currentDateRef.current = currentDate;
 
+  // Track layer visibility in ref for keyboard handler (avoids re-attaching listener on every toggle)
+  const layerVisibilityRef = useRef(layerVisibility);
+  layerVisibilityRef.current = layerVisibility;
+
   // Playback interval - runs in TorMap so it persists in cinema mode
   // Uses ref for currentDate to avoid recreating interval on every date change
   useEffect(() => {
@@ -612,8 +618,9 @@ export default function TorMap() {
     };
   }, [isPlaying, playbackSpeed, dateIndex, handleDateChange]);
 
-  // Keyboard shortcuts (H for cinema mode, arrows/space/home/end for playback)
+  // Keyboard shortcuts for navigation, playback, layers, and UI
   // Defined in TorMap so they work even when DateSliderChart is hidden in cinema mode
+  // Uses refs for values that change frequently to avoid re-attaching listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't trigger if user is typing in an input
@@ -621,6 +628,7 @@ export default function TorMap() {
       
       const dates = dateIndex?.dates;
       const currentIdx = currentDateRef.current && dates ? dates.indexOf(currentDateRef.current) : -1;
+      const visibility = layerVisibilityRef.current;
       
       // Helper to navigate and update URL hash
       const navigateTo = (date: string) => {
@@ -629,16 +637,55 @@ export default function TorMap() {
       };
       
       switch (e.key) {
+        // UI toggles
         case 'h':
         case 'H':
           setCinemaMode(prev => !prev);
           break;
+        case 's':
+        case 'S':
+          setShowSettings(prev => !prev);
+          break;
+        case '?':
+          setShowKeyboardHelp(true);
+          break;
+        case 'Escape':
+          setShowKeyboardHelp(false);
+          setShowSettings(false);
+          break;
+        
+        // Zoom controls
+        case '=':
+        case '+':
+          setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }));
+          break;
+        case '-':
+          setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom - 1, 1) }));
+          break;
+        
+        // Layer toggles (use ref to get current visibility)
+        case 'c':
+        case 'C':
+          handleLayerVisibilityChange({ ...visibility, countries: !visibility.countries });
+          break;
+        case 'r':
+        case 'R':
+          handleLayerVisibilityChange({ ...visibility, relays: !visibility.relays });
+          break;
+        case 'p':
+        case 'P':
+          handleLayerVisibilityChange({ ...visibility, particles: !visibility.particles });
+          break;
+        
+        // Date navigation
         case 'ArrowLeft':
           if (dates && currentIdx > 0) navigateTo(dates[currentIdx - 1]);
           break;
         case 'ArrowRight':
           if (dates && currentIdx >= 0 && currentIdx < dates.length - 1) navigateTo(dates[currentIdx + 1]);
           break;
+        
+        // Playback controls
         case ' ':
           e.preventDefault();
           setIsPlaying(prev => !prev);
@@ -655,7 +702,7 @@ export default function TorMap() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [dateIndex, handleDateChange]);
+  }, [dateIndex, handleDateChange, handleLayerVisibilityChange]);
 
   // Handle click on relay marker
   const handleClick = useCallback((info: PickingInfo) => {
@@ -1447,6 +1494,18 @@ export default function TorMap() {
               trafficEnabled={layerVisibility.particles}
             />
 
+            {/* Keyboard Shortcuts Help */}
+            <button
+              onClick={() => setShowKeyboardHelp(true)}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-md border border-tor-green/20 text-tor-green active:bg-tor-green/30 transition-colors ${isMobile ? '' : 'hover:bg-tor-green/20'}`}
+              aria-label="Keyboard shortcuts"
+              title="Keyboard Shortcuts (?)"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 5h12a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2zm1 4h2m2 0h2m2 0h2M7 12h2m2 0h2m2 0h2M8 15h8" />
+              </svg>
+            </button>
+
             {/* Zoom buttons */}
             <button
               onClick={() => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 18) }))}
@@ -1503,6 +1562,11 @@ export default function TorMap() {
           <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-tor-green"></div>
           <span className="text-tor-green text-xs">Loading...</span>
         </div>
+      )}
+
+      {/* Keyboard shortcuts help modal */}
+      {showKeyboardHelp && (
+        <KeyboardShortcutsHelp onClose={() => setShowKeyboardHelp(false)} />
       )}
     </div>
   );
