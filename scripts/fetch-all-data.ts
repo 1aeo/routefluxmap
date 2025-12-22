@@ -146,7 +146,7 @@ interface CountryData {
   generatedAt: string;
   date: string;
   totalUsers: number;
-  countries: { [code: string]: number };
+  countries: { [code: string]: { count: number; lower: number; upper: number } };
 }
 
 interface DateIndex {
@@ -1357,14 +1357,20 @@ function fetchMonthlyCountryDataOnce(year: number, month: number): Promise<Map<s
         );
         
         // Group by date: { "2025-01-01": { countries: {}, totalUsers: 0 }, ... }
-        const byDate: Map<string, { countries: { [code: string]: number }; totalUsers: number; countrySum: number }> = new Map();
+        const byDate: Map<string, { 
+          countries: { [code: string]: { count: number; lower: number; upper: number } }; 
+          totalUsers: number; 
+          countrySum: number 
+        }> = new Map();
         
         for (const line of lines) {
           const parts = line.split(',');
           if (parts.length < 3) continue;
           
-          const [dateStr, countryRaw = '', usersStr] = parts;
+          const [dateStr, countryRaw = '', usersStr, lowerStr = '', upperStr = ''] = parts;
           const users = parseInt(usersStr, 10);
+          const lower = parseInt(lowerStr, 10) || 0;
+          const upper = parseInt(upperStr, 10) || 0;
           if (isNaN(users) || !dateStr) continue;
           
           // Initialize date entry if needed
@@ -1385,7 +1391,7 @@ function fetchMonthlyCountryDataOnce(year: number, month: number): Promise<Map<s
           const normalized = country.toUpperCase();
           if (normalized === '??' || normalized === '') continue;
           
-          entry.countries[normalized] = users;
+          entry.countries[normalized] = { count: users, lower, upper };
           entry.countrySum += users;
         }
         
@@ -1433,7 +1439,7 @@ function fetchDailyCountryDataOnce(date: string): Promise<CountryData> {
           l && !l.startsWith('#') && !l.startsWith('date,')
         );
         
-        const countries: { [code: string]: number } = {};
+        const countries: { [code: string]: { count: number; lower: number; upper: number } } = {};
         let totalUsers = 0;
         let hasAggregateRow = false;
         let countrySum = 0;
@@ -1442,8 +1448,10 @@ function fetchDailyCountryDataOnce(date: string): Promise<CountryData> {
           const parts = line.split(',');
           if (parts.length < 3) continue;
           
-          const [, countryRaw = '', usersStr] = parts;
+          const [, countryRaw = '', usersStr, lowerStr = '', upperStr = ''] = parts;
           const users = parseInt(usersStr, 10);
+          const lower = parseInt(lowerStr, 10) || 0;
+          const upper = parseInt(upperStr, 10) || 0;
           if (isNaN(users)) continue;
           
           const country = countryRaw.trim();
@@ -1457,7 +1465,7 @@ function fetchDailyCountryDataOnce(date: string): Promise<CountryData> {
           const normalized = country.toUpperCase();
           if (normalized === '??' || normalized === '') continue;
           
-          countries[normalized] = users;
+          countries[normalized] = { count: users, lower, upper };
           countrySum += users;
         }
         

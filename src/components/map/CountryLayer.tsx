@@ -6,7 +6,7 @@
  */
 
 import { GeoJsonLayer } from '@deck.gl/layers';
-import type { CountryHistogram } from '../../lib/types';
+import { type CountryHistogram, getCountryClientData, formatCompact, getDeviation, TOOLTIP_OFFSET } from '../../lib/types';
 import { forwardRef } from 'react';
 
 interface CountryLayerOptions {
@@ -14,19 +14,25 @@ interface CountryLayerOptions {
   geojson: GeoJSON.FeatureCollection | null;
   visible: boolean;
   opacity?: number;
-  // Note: onClick and onHover removed - using CPU point-in-polygon instead
-  // This eliminates expensive GPU readPixels() on every mouse move
 }
 
-// Color ramp: dark blue-gray (#1a1a2e) → bright green (#00ff88)
-function getCountryColor(normalizedValue: number): [number, number, number, number] {
-  // Linear interpolation with alpha scaling for depth perception
-  const r = Math.round(26 + (0 - 26) * normalizedValue);
-  const g = Math.round(26 + (255 - 26) * normalizedValue);
-  const b = Math.round(46 + (136 - 46) * normalizedValue);
-  const a = Math.round(100 + 155 * normalizedValue); // 100-255 alpha
-  
-  return [r, g, b, a];
+// Color constants
+const NO_DATA_COLOR: [number, number, number, number] = [26, 26, 46, 50];
+const LINE_COLOR: [number, number, number, number] = [0, 100, 50, 100];
+
+// Color ramp: dark (#1a1a2e, a=100) → green (#00ff88, a=255)
+// Pre-computed deltas for efficient interpolation
+const COLOR_BASE = [26, 26, 46, 100] as const;
+const COLOR_DELTA = [-26, 229, 90, 155] as const; // end - start
+
+/** Interpolate color based on normalized value [0,1] */
+function getCountryColor(t: number): [number, number, number, number] {
+  return [
+    Math.round(COLOR_BASE[0] + COLOR_DELTA[0] * t),
+    Math.round(COLOR_BASE[1] + COLOR_DELTA[1] * t),
+    Math.round(COLOR_BASE[2] + COLOR_DELTA[2] * t),
+    Math.round(COLOR_BASE[3] + COLOR_DELTA[3] * t),
+  ];
 }
 
 // Get country code from feature properties
@@ -49,9 +55,14 @@ export function createCountryLayer({
   // even when not visible to keep geometry in GPU memory and avoid re-parsing lag
   if (!geojson) return null;
   
-  // Calculate max client count for normalization
-  const counts = Object.values(countryData);
-  const maxCount = Math.max(...counts, 1);
+  // Pre-compute counts lookup and max in single pass
+  let maxCount = 1;
+  const countLookup: Record<string, number> = {};
+  for (const code in countryData) {
+    const count = getCountryClientData(countryData, code).count;
+    countLookup[code] = count;
+    if (count > maxCount) maxCount = count;
+  }
   
   return new GeoJsonLayer({
     id: 'countries',
@@ -67,18 +78,15 @@ export function createCountryLayer({
     opacity,
     lineWidthMinPixels: 1,
     
-    // Style based on client count
+    // Style based on client count (uses pre-computed lookup)
     getFillColor: (feature: any) => {
       const cc = getCountryCode(feature);
-      if (!cc || !countryData[cc]) {
-        return [26, 26, 46, 50]; // Dark with low opacity for countries without data
-      }
-      const count = countryData[cc];
-      const normalized = Math.sqrt(count / maxCount); // Square root for better distribution
-      return getCountryColor(normalized);
+      const count = cc ? countLookup[cc] : undefined;
+      if (count === undefined) return NO_DATA_COLOR;
+      return getCountryColor(Math.sqrt(count / maxCount)); // sqrt for better distribution
     },
     
-    getLineColor: [0, 100, 50, 100], // Dark green border
+    getLineColor: LINE_COLOR,
     getLineWidth: 1,
     
     updateTriggers: {
@@ -98,42 +106,46 @@ interface CountryTooltipProps {
 }
 
 export const CountryTooltip = forwardRef<HTMLDivElement, CountryTooltipProps>(
-  ({ countryCode, countryData, x, y, style }, ref) => {
-    const count = countryData[countryCode] || 0;
+  function CountryTooltip({ countryCode, countryData, x, y, style }, ref) {
+    const { count, lower, upper, hasBounds } = getCountryClientData(countryData, countryCode);
+    const countStr = count.toLocaleString();
     
     return (
       <div
         ref={ref}
         className="absolute pointer-events-none bg-black/90 text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-purple-500/30 z-10 transition-opacity duration-75"
-        style={{
-          left: x + 10,
-          top: y + 10,
-          ...style
-        }}
+        style={{ left: x + TOOLTIP_OFFSET, top: y + TOOLTIP_OFFSET, ...style }}
       >
         <div className="font-medium text-purple-400 country-name">{countryCode}</div>
         <div className="text-gray-400 country-count">
-          {count.toLocaleString()} clients
+          {countStr}{hasBounds && ` ± ${formatCompact(getDeviation(lower, upper))}`} clients
+        </div>
+        {/* Always render bounds element so DOM ref caching works; hide via display:none */}
+        <div 
+          className="text-gray-500 text-xs country-bounds"
+          style={{ display: hasBounds ? undefined : 'none' }}
+        >
+          Lower: {lower.toLocaleString()} / Upper: {upper.toLocaleString()}
         </div>
       </div>
     );
   }
 );
 
-// Utility to format country data for display
+/** Format country data for display: total count and top 10 countries */
 export function formatCountryStats(countryData: CountryHistogram): {
   total: number;
   topCountries: { code: string; count: number }[];
 } {
-  const entries = Object.entries(countryData);
-  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  let total = 0;
+  const entries: { code: string; count: number }[] = [];
   
-  const topCountries = entries
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([code, count]) => ({ code, count }));
+  for (const code in countryData) {
+    const count = getCountryClientData(countryData, code).count;
+    total += count;
+    entries.push({ code, count });
+  }
   
-  return { total, topCountries };
+  entries.sort((a, b) => b.count - a.count);
+  return { total, topCountries: entries.slice(0, 10) };
 }
-
-

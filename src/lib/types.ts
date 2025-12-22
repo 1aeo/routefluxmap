@@ -56,10 +56,66 @@ export interface RelayData {
   minMax: { min: number; max: number };
 }
 
-// Country client count histogram
-export interface CountryHistogram {
-  [countryCode: string]: number;
+// Country client data with confidence bounds (new format)
+export interface CountryClientData {
+  count: number;
+  lower: number;
+  upper: number;
 }
+
+// Country client count histogram
+// Supports both old format (number) and new format (object with bounds)
+export interface CountryHistogram {
+  [countryCode: string]: number | CountryClientData;
+}
+
+/** Result of parsing country client data */
+export interface ParsedCountryData {
+  count: number;
+  lower: number;
+  upper: number;
+  hasBounds: boolean;
+}
+
+/** Shared empty result to avoid allocations */
+const EMPTY_COUNTRY_DATA: ParsedCountryData = { count: 0, lower: 0, upper: 0, hasBounds: false };
+
+/**
+ * Normalize country data access (handles both old and new formats).
+ * Old format: { "US": 826214 }
+ * New format: { "US": { count: 826214, lower: 593164, upper: 1100000 } }
+ */
+export function getCountryClientData(
+  countryData: CountryHistogram,
+  code: string
+): ParsedCountryData {
+  const data = countryData[code];
+  if (data == null) return EMPTY_COUNTRY_DATA;
+  if (typeof data === 'number') {
+    return { count: data, lower: 0, upper: 0, hasBounds: false };
+  }
+  return {
+    count: data.count,
+    lower: data.lower,
+    upper: data.upper,
+    hasBounds: data.lower > 0 || data.upper > 0,
+  };
+}
+
+/** Format large numbers compactly (e.g., 1.2M, 456K) */
+export function formatCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return n.toLocaleString();
+}
+
+/** Calculate confidence deviation from bounds: (upper - lower) / 2 */
+export function getDeviation(lower: number, upper: number): number {
+  return Math.round((upper - lower) / 2);
+}
+
+/** Tooltip offset from cursor (px) */
+export const TOOLTIP_OFFSET = 10;
 
 // Country timeline data point
 export interface CountryTimeline {
