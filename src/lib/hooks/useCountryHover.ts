@@ -12,7 +12,7 @@
 
 import { useCallback, useRef, useEffect } from 'react';
 import type { RefObject } from 'react';
-import { type CountryHistogram, getCountryClientData, formatCompact, getDeviation, TOOLTIP_OFFSET } from '../types';
+import { type CountryHistogram, getCountryClientData, formatRange, TOOLTIP_OFFSET } from '../types';
 import { findCountryAtLocation, countryCentroids } from '../utils/geo';
 
 /** Throttle interval for country hover detection (~15fps) */
@@ -108,15 +108,10 @@ export function useCountryHover(): UseCountryHoverResult {
       
       if (els.name) els.name.textContent = code;
       if (els.count) {
-        const countStr = count.toLocaleString();
-        els.count.textContent = hasBounds
-          ? `${countStr} ± ${formatCompact(getDeviation(lower, upper))} clients`
-          : `${countStr} clients`;
+        els.count.textContent = `${count.toLocaleString()} clients`;
       }
       if (els.bounds) {
-        els.bounds.textContent = hasBounds
-          ? `Lower: ${lower.toLocaleString()} / Upper: ${upper.toLocaleString()}`
-          : '';
+        els.bounds.textContent = hasBounds ? `Est. range: ${formatRange(lower, upper)}` : '';
         els.bounds.style.display = hasBounds ? '' : 'none';
       }
       

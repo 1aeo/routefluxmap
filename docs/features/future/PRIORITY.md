@@ -2,286 +2,231 @@
 
 This document provides a recommended order for implementing remaining RouteFluxMap features, based on **impact vs effort** analysis.
 
+**Last Updated:** December 2024
+
 ---
 
-## Priority Matrix
+## ✅ Recently Implemented
+
+The following features from this priority list have been completed:
+
+| Feature | Status | Implementation |
+|---------|:------:|----------------|
+| Map Location URL | ✅ Done | `ML=lng,lat,zoom` and `CC=code` in URL hash via `url.ts` |
+| Legend Component | ✅ Done | `MapLegend.tsx` with relay type colors |
+| Keyboard Shortcuts | ✅ Done | `useHotkeys` hook + `KeyboardShortcutsHelp.tsx` modal |
+| Relay Search | ✅ Done | `RelaySearch.tsx` with autocomplete + focus ring |
+| Cinema Mode | ✅ Done | `H` key hides all UI for presentations |
+| Adaptive Preloading | ✅ Done | LRU cache (12 dates) with playback-aware prefetching in `useRelays.ts` |
+| WebGL Error Handling | ✅ Done | `useWebGL` hook + `WebGLError.tsx` component |
+| Component Refactor | ✅ Done | 13 custom hooks, layer factories, clean separation |
+
+---
+
+## Priority Matrix (Remaining Features)
 
 | Priority | Feature | Impact | Effort | Doc |
 |:--------:|---------|:------:|:------:|-----|
-| 🥇 1 | Map Location URL | High | Low | [Additional Controls](./additional-controls.md#1-map-location-url-persistence) |
-| 🥈 2 | Country Outlier Chart | High | Medium | [Country Outlier](./country-outlier.md) |
-| 🥉 3 | Country Date Histogram | High | Medium | [Country Date Histogram](./country-date-histogram.md) |
-| 4 | Multi-Source Geolocation (Phase 1) | High | Low | [Multi-Source Geolocation](./multi-source-geolocation.md) |
-| 5 | Legend Component | Medium | Low | [Additional Controls](./additional-controls.md#9-legend-component) |
-| 6 | Social Sharing | Medium | Low | [Additional Controls](./additional-controls.md#8-social-sharing) |
-| 7 | Multi-Source Geolocation (Phase 2-3) | Medium | Medium | [Multi-Source Geolocation](./multi-source-geolocation.md) |
-| 8 | Bezier Path Curves | Medium | High | [Bezier Path Offset](./bezier-path-offset.md) |
-| 9 | Node/Country Sliders | Low | Low | [Additional Controls](./additional-controls.md#2-node-count-slider) |
-| 10 | Scaling Toggles | Low | Low | [Additional Controls](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes) |
-| 11 | Other Controls | Very Low | Low | [Additional Controls](./additional-controls.md) |
+| 🥇 1 | Country Analytics Modal | High | Medium | [Country Outlier](./country-outlier.md) + [Histogram](./country-date-histogram.md) |
+| 🥈 2 | Bezier Path Curves | High | Medium | [Bezier Path Offset](./bezier-path-offset.md) |
+| 🥉 3 | Social Sharing + Screenshot | Medium | Low | [Additional Controls](./additional-controls.md#8-social-sharing) |
+| 4 | Multi-Source Geolocation | Medium | Medium | [Multi-Source Geolocation](./multi-source-geolocation.md) |
+| 5 | Simplified Country Boundaries | Low | Low | [Simplified Boundaries](./simplified-country-boundaries.md) |
 
 ---
 
 ## Detailed Rationale
 
-### 🥇 Priority 1: Map Location URL Persistence
+### 🥇 Priority 1: Country Analytics Modal
 
-**Document:** [Additional Controls → Map Location URL](./additional-controls.md#1-map-location-url-persistence)
+**Documents:** [Country Outlier Chart](./country-outlier.md) + [Country Date Histogram](./country-date-histogram.md)
 
 **Why #1:**
-- **Extremely low effort** - Just URL hash manipulation
-- **High user value** - Users can bookmark and share specific views
-- **Already partially done** - Date is already in URL hash, just add `&ML=lng,lat,zoom`
-- **Zero visual changes** - No UI work needed
-- **Foundation for other features** - Country deep-linking builds on this
-
-**Implementation time:** ~1 hour
-
----
-
-### 🥈 Priority 2: Country Outlier Chart
-
-**Document:** [Country Outlier Chart](./country-outlier.md)
-
-**Why #2:**
 - **Highest analytical value** - Key feature for researchers
-- **Data pipeline ready** - `calculateOutliers()` already exists in fetch scripts
+- **Data pipeline ready** - Country data already fetched daily via `countries-YYYY-MM-DD.json`
 - **Enables anomaly detection** - Identify censorship events, usage spikes
-- **Completes country click** - Currently just logs to console
+- **Completes country click** - Currently just centers the map and updates URL
+
+**Current State:** Clicking a country centers the map and updates URL (`CC=code`). Need to add modal with:
+- Timeline chart with clickable bars to navigate dates
+- Outlier highlighting (highs/lows from statistical mean)
+- Stats summary (mean, std dev, current value, % change)
 
 **Implementation time:** ~4-6 hours
 
-**Dependencies:**
-- Country history data fetching
-- Country code 2↔3 letter mapping
+**Files to create:**
+- `src/components/ui/CountryStatsModal.tsx`
+- `src/lib/utils/outlier-stats.ts`
 
 ---
 
-### 🥉 Priority 3: Country Date Histogram
+### 🥈 Priority 2: Bezier Path Curves
 
-**Document:** [Country Date Histogram](./country-date-histogram.md)
+**Document:** [Bezier Path Offset](./bezier-path-offset.md)
+
+**Why #2:**
+- **Visual signature** - Makes particle paths look like flight routes
+- **Distinctive look** - Curved arcs are visually appealing
+- **Shader infrastructure ready** - Worker uses WebGL2 with custom shaders
+
+**Current State:** Particle worker in `particle-render.worker.ts` uses straight-line interpolation:
+```glsl
+vec2 pos = mix(a_start, a_end, st);
+```
+
+**Recommended Implementation:** Modify vertex shader to use quadratic bezier:
+```glsl
+vec2 mid = (a_start + a_end) * 0.5;
+vec2 dir = a_end - a_start;
+vec2 perp = normalize(vec2(-dir.y, dir.x));
+vec2 ctrl = mid + perp * length(dir) * u_curveOffset;
+float t = st;
+vec2 pos = (1.0-t)*(1.0-t)*a_start + 2.0*(1.0-t)*t*ctrl + t*t*a_end;
+```
+
+**Implementation time:** ~4-6 hours
+
+---
+
+### 🥉 Priority 3: Social Sharing + Screenshot
+
+**Document:** [Additional Controls → Social Sharing](./additional-controls.md#8-social-sharing)
 
 **Why #3:**
-- **Completes country analytics** - Natural companion to outlier chart
-- **Shows trends over time** - Answers "how has usage changed?"
-- **Reuses same data** - Same country history data as outliers
-- **Modal integration** - Goes in same popup as outlier chart
-- **Bucketing algorithm documented** - Clear implementation path
+- **Low effort** - URL sharing already works via `ML`/`CC` params
+- **Community building** - Privacy/Tor community engagement
+- **Discoverability** - Users can share interesting findings
 
-**Implementation time:** ~3-4 hours
+**Current State:** URLs work perfectly for sharing specific map views. Need to add:
+- Share button UI with platform links (Twitter, Reddit, Mastodon)
+- Screenshot export button (capture canvas as PNG)
 
-**Dependencies:**
-- Country Outlier Chart (shares modal)
-- Bucketing utility
+**Implementation:**
+```typescript
+// Screenshot export
+async function exportScreenshot() {
+  const canvas = document.querySelector('canvas');
+  const dataUrl = canvas?.toDataURL('image/png');
+  // Download or copy to clipboard
+}
+```
+
+**Implementation time:** ~2-3 hours
 
 ---
 
-### Priority 4: Multi-Source Geolocation (Phase 1)
+### Priority 4: Multi-Source Geolocation
 
 **Document:** [Multi-Source Geolocation](./multi-source-geolocation.md)
 
 **Why #4:**
-- **Zero additional cost** - Onionoo already provides country data we're discarding
-- **Research value** - Detect discrepancies between sources
-- **Foundation for future** - Enables toggle feature (Phase 2-3)
+- **Research value** - Detect discrepancies between geo databases
 - **Transparency** - Users can see when sources disagree
-- **AS info for free** - Includes hosting provider data
+- **AS info available** - Onionoo provides hosting provider data we currently discard
 
-**Phase 1 includes:**
-- Store Onionoo country, countryName, AS, asName per relay
-- Derive MaxMind country from coordinates
-- Calculate countryMismatch boolean
-- Update data structures
+**Phases:**
+1. Store Onionoo country + AS data in relay files
+2. Show all sources in popup with mismatch indicators
+3. Settings toggle to switch visualization source
 
-**Implementation time:** ~2-4 hours
+**Implementation time:** ~8-12 hours (all phases)
 
 ---
 
-### Priority 5: Legend Component
+### Priority 5: Simplified Country Boundaries
 
-**Document:** [Additional Controls → Legend](./additional-controls.md#9-legend-component)
+**Document:** [Simplified Boundaries](./simplified-country-boundaries.md)
 
 **Why #5:**
-- **Improves comprehension** - Users understand what colors mean
-- **Low effort** - Simple gradient + labels
-- **Professional polish** - Expected in data visualizations
-- **Reusable** - Same component for bandwidth, connections, etc.
+- **Memory reduction** - 14MB → ~2MB GeoJSON
+- **Low effort** - Just swap the file
+- **Minimal visual impact** - Not noticeable at typical zoom levels (2-6)
 
-**Implementation time:** ~1-2 hours
-
----
-
-### Priority 6: Social Sharing
-
-**Document:** [Additional Controls → Social Sharing](./additional-controls.md#8-social-sharing)
-
-**Why #6:**
-- **Helps discoverability** - Users can share interesting findings
-- **Low effort** - Just share URLs to social platforms
-- **Works with Map URL** - Shares specific views (after #1)
-- **Community building** - Privacy/Tor community engagement
-
-**Implementation time:** ~1-2 hours
-
-**Dependencies:**
-- Map Location URL (#1) for meaningful shares
+**Implementation time:** ~30 minutes
 
 ---
 
-### Priority 7: Multi-Source Geolocation (Phase 2-3)
+## ✅ Already Implemented (Full List)
 
-**Document:** [Multi-Source Geolocation](./multi-source-geolocation.md)
+### Core Visualization
+- Map with Deck.gl + MapLibre GL ✅
+- Particle animation with Web Worker + OffscreenCanvas ✅
+- Traffic path lines with bandwidth-proportional routing ✅
+- Country choropleth layer ✅
 
-**Why #7:**
-- **Full transparency** - Toggle between sources network-wide
-- **Research capabilities** - Compare database accuracy
-- **User choice** - Let users pick their preferred source
-- **Popup enhancement** - Show all sources with discrepancy indicators
+### Data Management
+- Unified data pipeline (Onionoo, Collector, Tor Metrics, MaxMind) ✅
+- Adaptive preloading with LRU cache (12 dates) ✅
+- Playback-aware prefetching (forward-biased during playback) ✅
+- Staleness detection for date changes during fetch ✅
 
-**Phase 2-3 includes:**
-- Enhanced popup showing all geo sources
-- Settings toggle to switch visualization source
-- Re-aggregate nodes based on selected source
-- Optional: Add IP2Location as second coordinate source
+### UI Components
+- Date slider with histogram sparkline ✅
+- Relay popup with Tor Metrics links ✅
+- Settings panel (density, opacity, speed, relay size, traffic filter) ✅
+- Layer controls (relays, countries, particles) ✅
+- Legend with relay type colors ✅
+- Loading bar with status text ✅
+- Update notification for new data ✅
+- No data toast for empty dates ✅
 
-**Implementation time:** ~8-12 hours (both phases)
+### Navigation & Search
+- **Relay search** by nickname/fingerprint with autocomplete ✅
+- **Focus ring** highlight for search results ✅
+- **Keyboard shortcuts** (full set): ✅
+  - `←/→` Navigate dates
+  - `Space` Play/pause
+  - `Home/End` First/last date
+  - `+/-` Zoom
+  - `C/R/P` Toggle layers
+  - `S` Settings panel
+  - `H` Cinema mode
+  - `?` Shortcuts help
+  - `Esc` Close modals
+- **Cinema mode** - hide all UI for presentations ✅
+- **URL persistence** (date, map location, country code) ✅
 
-**Dependencies:**
-- Multi-Source Geolocation Phase 1 (#4)
-
----
-
-### Priority 8: Bezier Path Curves
-
-**Document:** [Bezier Path Offset](./bezier-path-offset.md)
-
-**Why #8:**
-- **Visual polish** - Makes particle paths look like flight routes
-- **Distinctive look** - Curved arcs are visually appealing
-- **Higher complexity** - Requires shader work or CPU bezier math
-- **Not blocking anything** - Straight lines work fine
-
-**Implementation time:** ~6-10 hours
-
-**Recommendation:** Start with CPU-based approximation (Option B in doc), upgrade to GPU shader later if performance allows.
-
----
-
-### Priority 9: Node/Country Count Sliders
-
-**Document:** [Additional Controls → Node Count](./additional-controls.md#2-node-count-slider), [Country Count](./additional-controls.md#3-country-count-slider)
-
-**Why #9:**
-- **Power user feature** - Most users won't adjust
-- **Low effort** - Simple slider + filter
-- **Performance tuning** - Useful for slow devices
-- **Current defaults work** - Show all nodes is fine
-
-**Implementation time:** ~2 hours for both
-
----
-
-### Priority 10: Scaling Toggles
-
-**Document:** [Additional Controls → Scaling Options](./additional-controls.md#4-scale-by-bandwidth-toggle-nodes)
-
-**Why #10:**
-- **Niche use cases** - Most users prefer default scaling
-- **Low effort** - Just toggles
-- **Current behavior is good** - Scaling enabled by default
-
-Includes:
-- Scale nodes by bandwidth toggle
-- Scale particles by zoom toggle
-- Scale particle count by bandwidth toggle
-
-**Implementation time:** ~2 hours for all
-
----
-
-### Priority 11: Other Controls
-
-**Document:** [Additional Controls](./additional-controls.md)
-
-**Why #11:**
-- **Very niche features** - Rarely needed
-- **Polish items** - Nice to have, not essential
-
-Includes:
-- Base map brightness slider
-- Particle size slider (partially done)
-- Summary/info modal
-- Draggable modal dialogs
-
-**Implementation time:** ~3-4 hours for all
-
----
-
-## Quick Wins (< 4 hours each)
-
-If you have limited time, these deliver the most value quickly:
-
-1. ✅ **Map Location URL** - 1 hour, high impact
-2. ✅ **Multi-Source Geo Phase 1** - 2-4 hours, stores data we already fetch
-3. ✅ **Legend Component** - 1-2 hours, improves UX
-4. ✅ **Social Sharing** - 1-2 hours, helps growth
-
----
-
-## Medium Projects (half day)
-
-1. 🔧 **Country Outlier Chart** - 4-6 hours, highest analytical value
-2. 🔧 **Country Date Histogram** - 3-4 hours, completes country analytics
-
----
-
-## Larger Projects (full day+)
-
-1. 🏗️ **Bezier Path Curves** - 6-10 hours, visual signature feature
+### Architecture
+- 13 custom React hooks extracted ✅
+- Layer factories separated (`createRelayLayer`, `createFocusRingLayer`) ✅
+- WebGL availability detection with error UI ✅
+- Mobile responsive layout ✅
+- Component tests (Vitest) ✅
 
 ---
 
 ## Suggested Sprint Plan
 
-### Sprint 1: Foundation (1 day)
-- [ ] Map Location URL
+### Sprint 1: Country Analytics (1-2 days)
+- [ ] Country Analytics Modal (outlier chart + histogram)
+- [ ] Outlier stats utility
+
+### Sprint 2: Visual Polish (1 day)
+- [ ] Bezier Path Curves (shader modification)
+- [ ] Screenshot Export
+
+### Sprint 3: Sharing & Transparency (1 day)
+- [ ] Social Sharing buttons
 - [ ] Multi-Source Geo Phase 1 (store Onionoo data)
-- [ ] Legend Component  
-- [ ] Social Sharing
-
-### Sprint 2: Country Analytics (2 days)
-- [ ] Country Outlier Chart
-- [ ] Country Date Histogram
-- [ ] Country code mapping utility
-
-### Sprint 3: Geolocation Transparency (1-2 days)
-- [ ] Multi-Source Geo Phase 2 (popup enhancement)
-- [ ] Multi-Source Geo Phase 3 (settings toggle)
-
-### Sprint 4: Polish (1-2 days)
-- [ ] Bezier Path Curves
-- [ ] Any remaining controls
 
 ---
 
 ## Feature Dependencies Graph
 
 ```
-Map Location URL (#1)
-    └── Social Sharing (#6) [shares meaningful URLs]
-    └── Country URL linking [future enhancement]
+Country Analytics Modal (#1)
+    ├── Country data (already fetched daily)
+    └── Outlier stats utility (new)
 
-Country Outlier Chart (#2)
-    ├── Country history data [data pipeline]
-    └── Country Date Histogram (#3) [shares modal]
+Bezier Paths (#2)
+    └── Shader modification in particle-render.worker.ts
 
-Multi-Source Geo Phase 1 (#4)
-    └── Multi-Source Geo Phase 2-3 (#7) [requires data in files]
-        ├── Popup geo source display
-        └── Settings source toggle
+Social Sharing (#3)
+    ├── URL persistence (already done)
+    └── Screenshot Export (optional enhancement)
 
-Bezier Paths (#8)
-    └── (No dependencies)
+Multi-Source Geo (#4)
+    └── Data pipeline changes in fetch-all-data.ts
 ```
 
 ---
@@ -292,37 +237,10 @@ These features were intentionally excluded:
 
 | Feature | Reason |
 |---------|--------|
-| Traffic Type Toggle | User requested skip |
+| Node/Country Count Sliders | Density slider covers this use case |
+| Scale by Bandwidth Toggle | Always on, better default behavior |
+| Base Map Brightness | Low value, adds UI complexity |
+| Draggable Modals | Not needed with current modal count |
+| Traffic Type Toggle | Hidden service filter exists in settings |
 | MySQL Backend | Static site architecture |
 | Docker Deployment | Cloudflare Pages hosting |
-| Legacy Build Tools | Modern npm/Vite tooling |
-
----
-
-## Current State Summary
-
-**Already Implemented:**
-- Core map visualization ✅
-- Particle animation ✅
-- Web Worker particle generation ✅
-- Traffic path lines ✅
-- Real country data ✅
-- Date slider/histogram ✅
-- Relay popup with Metrics links ✅
-- Settings panel ✅
-- Keyboard navigation ✅
-- Layer controls ✅
-- About page ✅
-- Automated data pipeline ✅
-- Loading bar ✅
-
-**Remaining (by priority):**
-1. Map URL (trivial)
-2. Outlier Chart (medium)
-3. Date Histogram (medium)
-4. Multi-Source Geo Phase 1 (easy - store existing data)
-5. Legend (easy)
-6. Sharing (easy)
-7. Multi-Source Geo Phase 2-3 (medium)
-8. Bezier Paths (complex)
-9-11. Various controls (easy)

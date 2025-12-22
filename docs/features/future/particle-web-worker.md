@@ -1,12 +1,16 @@
 # Feature: Web Worker for Particle Generation
 
-**Status:** ✅ Implemented  
+**Status:** ✅ Fully Implemented  
 **Priority:** Low-Medium  
-**Complexity:** Medium
+**Complexity:** Medium  
+**Implementation:** `src/workers/particle-render.worker.ts`, `src/components/map/ParticleCanvas.tsx`
 
 ## Overview
 
-Offload particle generation to a Web Worker to prevent UI freezing during initialization. This prevents brief stuttering when loading large particle counts (50K+).
+Offload particle generation and rendering to a Web Worker using OffscreenCanvas. This provides:
+- Zero UI blocking during particle generation
+- GPU rendering on a separate thread
+- Smooth 60fps animation independent of main thread
 
 ## Problem Statement
 

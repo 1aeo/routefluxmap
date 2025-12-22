@@ -6,7 +6,7 @@
  */
 
 import { GeoJsonLayer } from '@deck.gl/layers';
-import { type CountryHistogram, getCountryClientData, formatCompact, getDeviation, TOOLTIP_OFFSET } from '../../lib/types';
+import { type CountryHistogram, getCountryClientData, formatRange, TOOLTIP_OFFSET } from '../../lib/types';
 import { forwardRef } from 'react';
 
 interface CountryLayerOptions {
@@ -117,15 +117,13 @@ export const CountryTooltip = forwardRef<HTMLDivElement, CountryTooltipProps>(
         style={{ left: x + TOOLTIP_OFFSET, top: y + TOOLTIP_OFFSET, ...style }}
       >
         <div className="font-medium text-purple-400 country-name">{countryCode}</div>
-        <div className="text-gray-400 country-count">
-          {countStr}{hasBounds && ` ± ${formatCompact(getDeviation(lower, upper))}`} clients
-        </div>
+        <div className="text-gray-400 country-count">{countStr} clients</div>
         {/* Always render bounds element so DOM ref caching works; hide via display:none */}
         <div 
           className="text-gray-500 text-xs country-bounds"
           style={{ display: hasBounds ? undefined : 'none' }}
         >
-          Lower: {lower.toLocaleString()} / Upper: {upper.toLocaleString()}
+          Est. range: {formatRange(lower, upper)}
         </div>
       </div>
     );

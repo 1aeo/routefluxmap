@@ -109,9 +109,9 @@ export function formatCompact(n: number): string {
   return n.toLocaleString();
 }
 
-/** Calculate confidence deviation from bounds: (upper - lower) / 2 */
-export function getDeviation(lower: number, upper: number): number {
-  return Math.round((upper - lower) / 2);
+/** Format confidence bounds as compact range (e.g., "294K – 1.1M") */
+export function formatRange(lower: number, upper: number): string {
+  return `${formatCompact(lower)} – ${formatCompact(upper)}`;
 }
 
 /** Tooltip offset from cursor (px) */
