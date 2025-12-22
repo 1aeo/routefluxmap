@@ -10,13 +10,18 @@
  * - useDatePlayback.test.ts - playback controls
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import TorMap from '../../../src/components/map/TorMap';
 import { mockDateIndex, mockRelayData, mockFetchResponse } from '../../lib/hooks/test-utils';
 
-// Mock Deck.gl components
+// vi.hoisted runs before mock hoisting, making React available in mocks
+const { forwardRef } = vi.hoisted(() => require('react'));
+
+// Mock Deck.gl components with forwardRef to handle ref prop
 vi.mock('@deck.gl/react', () => ({
-  default: ({ children }: any) => <div data-testid="deckgl">{children}</div>,
+  default: forwardRef(({ children }: any, ref: any) => (
+    <div ref={ref} data-testid="deckgl">{children}</div>
+  )),
 }));
 
 vi.mock('@deck.gl/layers', () => ({
@@ -40,10 +45,12 @@ vi.mock('../../../src/components/map/ParticleCanvas', () => ({
   default: () => <div data-testid="particle-canvas" />,
 }));
 
-// Mock CountryLayer
+// Mock CountryLayer with forwardRef to handle ref prop
 vi.mock('../../../src/components/map/CountryLayer', () => ({
   createCountryLayer: () => null,
-  CountryTooltip: () => <div data-testid="country-tooltip" />,
+  CountryTooltip: forwardRef((props: any, ref: any) => (
+    <div ref={ref} data-testid="country-tooltip" />
+  )),
 }));
 
 // Mock GeoJSON
@@ -96,16 +103,17 @@ describe('TorMap', () => {
   };
 
   describe('rendering', () => {
-    it('renders without crashing', () => {
+    it('renders without crashing', async () => {
       setupMocks();
       const { container } = render(<TorMap />);
+      await act(async () => {}); // Flush pending updates
       expect(container.firstChild).toBeDefined();
     });
 
     it('shows loading state initially', () => {
       (global.fetch as any).mockImplementation(() => new Promise(() => {}));
       const { container } = render(<TorMap />);
-      // Component renders and shows some loading UI (could be overlay or placeholder)
+      // No act needed - we want the immediate loading state
       expect(container.firstChild).toBeDefined();
     });
 
@@ -114,7 +122,7 @@ describe('TorMap', () => {
       render(<TorMap />);
       await waitFor(() => {
         expect(screen.getByTestId('deckgl')).toBeDefined();
-      }, { timeout: 2000 });
+      });
     });
   });
 
@@ -128,13 +136,12 @@ describe('TorMap', () => {
       });
 
       render(<TorMap />);
-
       await waitFor(() => {
         expect(screen.getByText(/Failed to load relay data/i)).toBeDefined();
-      }, { timeout: 2000 });
+      });
     });
 
-    it('shows WebGL error when unavailable', () => {
+    it('shows WebGL error when unavailable', async () => {
       document.createElement = ((tagName: string) => {
         const element = originalCreateElement(tagName);
         if (tagName === 'canvas') {
@@ -145,6 +152,8 @@ describe('TorMap', () => {
 
       render(<TorMap />);
       expect(screen.getByText(/WebGL Required/i)).toBeDefined();
+      // Flush any pending effects to avoid act() warnings
+      await act(async () => {});
     });
   });
 });
