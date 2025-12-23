@@ -189,6 +189,18 @@ export default function TorMap() {
 
   const hasRelayNodes = !!(relayData?.nodes?.length);
 
+  // Check if any country has client data (to disable tooltip when all zero)
+  const hasAnyClientData = useMemo(() => {
+    for (const k in countryData) {
+      const d = countryData[k];
+      if ((typeof d === 'number' ? d : d.count) > 0) return true;
+    }
+    return false;
+  }, [countryData]);
+
+  // Combined flag for country hover/click interactions
+  const countryInteractionsEnabled = visibility.countries && hasAnyClientData;
+
   // Filter/aggregate nodes based on path mode and traffic filter
   const filteredNodes = useMemo(() => {
     if (!relayData?.nodes?.length) return [];
@@ -282,19 +294,19 @@ export default function TorMap() {
   const handleCountryMouseMove = useCallback(
     (event: React.MouseEvent) => {
       countryHover.handleMouseMove(event, {
-        layerVisible: visibility.countries,
-      geojson: countryGeojson,
+        layerVisible: countryInteractionsEnabled,
+        geojson: countryGeojson,
         unproject: unprojectCoords,
         countryData,
       });
     },
-    [countryHover, visibility.countries, countryGeojson, unprojectCoords, countryData]
+    [countryHover, countryInteractionsEnabled, countryGeojson, unprojectCoords, countryData]
   );
 
   const handleCountryClick = useCallback(
     (event: React.MouseEvent) => {
       countryHover.handleClick(event, {
-        layerVisible: visibility.countries,
+        layerVisible: countryInteractionsEnabled,
         geojson: countryGeojson,
         unproject: unprojectCoords,
         onCountryClick: (code, centroid) => {
@@ -311,7 +323,7 @@ export default function TorMap() {
         },
       });
     },
-    [countryHover, visibility.countries, countryGeojson, unprojectCoords, setViewState]
+    [countryHover, countryInteractionsEnabled, countryGeojson, unprojectCoords, setViewState]
   );
 
   // Focus relay from search
@@ -437,7 +449,7 @@ export default function TorMap() {
       {/* Map wrapper for country hover */}
       <div 
         onMouseMove={handleCountryMouseMove}
-        onClick={visibility.countries ? handleCountryClick : undefined}
+        onClick={countryInteractionsEnabled ? handleCountryClick : undefined}
         style={{ position: 'absolute', inset: 0, zIndex: 1 }}
       >
         <DeckGL
