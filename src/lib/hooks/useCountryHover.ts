@@ -10,7 +10,7 @@
  * - Country click to center map
  */
 
-import { useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef, useEffect, useMemo } from 'react';
 import type { RefObject } from 'react';
 import { type CountryHistogram, getCountryClientData, formatRange, TOOLTIP_OFFSET } from '../types';
 import { findCountryAtLocation, countryCentroids } from '../utils/geo';
@@ -18,11 +18,29 @@ import { findCountryAtLocation, countryCentroids } from '../utils/geo';
 /** Throttle interval for country hover detection (~15fps) */
 const HOVER_THROTTLE_MS = 66;
 
-/** Set tooltip position and show */
-const setTooltipPosition = (el: HTMLElement, x: number, y: number) => {
+/** Cached tooltip element refs to avoid DOM queries on every hover */
+interface TooltipElements {
+  name: Element | null;
+  count: Element | null;
+  bounds: HTMLElement | null;
+}
+
+/** Set tooltip position and show (module-level for zero allocation) */
+const setTooltipPosition = (el: HTMLElement, x: number, y: number): void => {
   el.style.left = `${x + TOOLTIP_OFFSET}px`;
   el.style.top = `${y + TOOLTIP_OFFSET}px`;
   el.style.opacity = '1';
+};
+
+/** Update tooltip count/bounds content (module-level pure function) */
+const updateTooltipContent = (els: TooltipElements, countryData: CountryHistogram, code: string): void => {
+  const { count, lower, upper, hasBounds } = getCountryClientData(countryData, code);
+  
+  if (els.count) els.count.textContent = `${count.toLocaleString()} clients`;
+  if (els.bounds) {
+    els.bounds.textContent = hasBounds ? `Est. range: ${formatRange(lower, upper)}` : '';
+    els.bounds.style.display = hasBounds ? '' : 'none';
+  }
 };
 
 export interface CountryHoverInfo {
@@ -53,13 +71,8 @@ export interface UseCountryHoverResult {
   handleMouseMove: (event: React.MouseEvent, options: MouseMoveOptions) => void;
   handleClick: (event: React.MouseEvent, options: ClickOptions) => void;
   clearTooltip: () => void;
-}
-
-/** Cached tooltip element refs to avoid DOM queries on every hover */
-interface TooltipElements {
-  name: Element | null;
-  count: Element | null;
-  bounds: HTMLElement | null;
+  /** Refresh tooltip content with new data (for when countryData changes during hover) */
+  refreshData: (countryData: CountryHistogram) => void;
 }
 
 /**
@@ -69,7 +82,6 @@ export function useCountryHover(): UseCountryHoverResult {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const hoverInfo = useRef<CountryHoverInfo | null>(null);
   const throttleTimerRef = useRef<number | null>(null);
-  const lastCountryCodeRef = useRef<string | null>(null);
   const elementsRef = useRef<TooltipElements | null>(null);
   
   /** Get cached tooltip elements (lazy initialization) */
@@ -104,17 +116,8 @@ export function useCountryHover(): UseCountryHoverResult {
       const els = getElements();
       if (!els) return;
       
-      const { count, lower, upper, hasBounds } = getCountryClientData(countryData, code);
-      
       if (els.name) els.name.textContent = code;
-      if (els.count) {
-        els.count.textContent = `${count.toLocaleString()} clients`;
-      }
-      if (els.bounds) {
-        els.bounds.textContent = hasBounds ? `Est. range: ${formatRange(lower, upper)}` : '';
-        els.bounds.style.display = hasBounds ? '' : 'none';
-      }
-      
+      updateTooltipContent(els, countryData, code);
       setTooltipPosition(tooltip, x, y);
     },
     []
@@ -127,10 +130,7 @@ export function useCountryHover(): UseCountryHoverResult {
 
       // Clear tooltip if layer hidden
       if (!layerVisible || !geojson) {
-        if (lastCountryCodeRef.current) {
-          updateTooltip(null, 0, 0, countryData);
-          lastCountryCodeRef.current = null;
-        }
+        if (hoverInfo.current) updateTooltip(null, 0, 0, countryData);
         return;
       }
 
@@ -147,9 +147,9 @@ export function useCountryHover(): UseCountryHoverResult {
 
         const country = findCountryAtLocation(coords[0], coords[1], geojson);
         const code = country?.code ?? null;
+        const prevCode = hoverInfo.current?.code ?? null;
 
-        if (code !== lastCountryCodeRef.current) {
-          lastCountryCodeRef.current = code;
+        if (code !== prevCode) {
           updateTooltip(code, offsetX, offsetY, countryData);
         } else if (code && tooltipRef.current) {
           // Same country - just update position
@@ -181,16 +181,29 @@ export function useCountryHover(): UseCountryHoverResult {
   /** Clear tooltip state */
   const clearTooltip = useCallback(() => {
     hoverInfo.current = null;
-    lastCountryCodeRef.current = null;
     if (tooltipRef.current) tooltipRef.current.style.opacity = '0';
   }, []);
 
-  return {
+  /** Refresh tooltip content with new data (when data changes during active hover) */
+  const refreshData = useCallback((countryData: CountryHistogram) => {
+    // Early exit if no active hover (avoid getElements call)
+    const info = hoverInfo.current;
+    if (!info) return;
+    
+    const els = elementsRef.current;
+    if (!els) return;
+    
+    updateTooltipContent(els, countryData, info.code);
+  }, []);
+
+  // Memoize return object to prevent unnecessary re-renders in consumers
+  return useMemo(() => ({
     tooltipRef,
     hoverInfo,
     handleMouseMove,
     handleClick,
     clearTooltip,
-  };
+    refreshData,
+  }), [handleMouseMove, handleClick, clearTooltip, refreshData]);
 }
 

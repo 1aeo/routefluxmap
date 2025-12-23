@@ -89,6 +89,11 @@ export default function TorMap() {
   const relaySelection = useRelaySelection();
   const countryHover = useCountryHover();
 
+  // Refresh country tooltip when data changes (e.g., during playback)
+  useEffect(() => {
+    countryHover.refreshData(countryData);
+  }, [countryData, countryHover]);
+
   // Layer visibility with callbacks
   const layerVisibilityCallbacks = useMemo(
     () => ({
