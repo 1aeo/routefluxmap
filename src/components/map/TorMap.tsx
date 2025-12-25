@@ -11,7 +11,8 @@ import { Map } from 'react-map-gl/maplibre';
 import type { AggregatedNode } from '../../lib/types';
 import { config } from '../../lib/config';
 import { countryCentroids, findCountryAtLocation } from '../../lib/utils/geo';
-import { formatMapLocation, updateUrlHash } from '../../lib/utils/url';
+import { formatMapLocation, updateUrlHash, getRelayParam, updateRelayFingerprint } from '../../lib/utils/url';
+import { buildSearchIndex, findRelayByFingerprint } from '../../lib/utils/relay-search';
 
 // Hooks
 import {
@@ -45,6 +46,7 @@ import RelaySearch from '../ui/RelaySearch';
 import DateSliderChart from '../ui/DateSliderChart';
 import UpdateNotification from '../ui/UpdateNotification';
 import NoDataToast from '../ui/NoDataToast';
+import ErrorToast from '../ui/ErrorToast';
 import StartupOverlay from '../ui/StartupOverlay';
 import KeyboardShortcutsHelp from '../ui/KeyboardShortcutsHelp';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -123,6 +125,13 @@ export default function TorMap() {
   const [showSettings, setShowSettings] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [windowSize, setWindowSize] = useState({ width: 800, height: 600 });
+  const [relayError, setRelayError] = useState<string | null>(null);
+
+  // Build search index from relay data (shared between RelaySearch and URL deep linking)
+  const searchIndex = useMemo(
+    () => buildSearchIndex(relayData?.nodes ?? []),
+    [relayData?.nodes]
+  );
 
   // Track window size for particle canvas
   useEffect(() => {
@@ -331,13 +340,19 @@ export default function TorMap() {
     [countryHover, countryInteractionsEnabled, countryGeojson, unprojectCoords, setViewState]
   );
 
-  // Focus relay from search
+  // Focus relay from search or URL deep link
   const focusRelay = useCallback(
     (nodeIndex: number, _relayIndex: number, fingerprint: string) => {
       const nodes = relayData?.nodes;
       if (!nodes || nodeIndex >= nodes.length) return;
 
       const node = nodes[nodeIndex];
+
+      // Update URL with fingerprint (sync, before any async operations)
+      updateRelayFingerprint(fingerprint);
+
+      // Clear any existing error toast
+      setRelayError(null);
 
       // Override filters
       handleVisibilityChange({ ...visibility, relays: true });
@@ -368,6 +383,67 @@ export default function TorMap() {
     },
     [relayData, visibility, handleVisibilityChange, particleSettings, flyToLocation, relaySelection, countryGeojson]
   );
+
+  // Track if we've processed the initial URL relay parameter
+  const initialRelayProcessedRef = useRef(false);
+  const previousDateRef = useRef<string | null>(null);
+
+  /**
+   * Process relay fingerprint from URL - shared by initial load and hash changes
+   * @param isInitialLoad - Whether this is the first time processing (affects error messages)
+   * @param isDateChange - Whether the date changed (affects error message for missing relay)
+   */
+  const processRelayFromUrl = useCallback((isInitialLoad: boolean, isDateChange: boolean) => {
+    const relayParam = getRelayParam();
+    
+    if (relayParam.status === 'none') return;
+    
+    if (relayParam.status === 'invalid') {
+      if (isInitialLoad) setRelayError('Invalid relay fingerprint in URL');
+      updateRelayFingerprint(null);
+      return;
+    }
+
+    // relayParam.status === 'valid'
+    const found = findRelayByFingerprint(searchIndex, relayParam.fingerprint);
+    
+    if (found) {
+      focusRelay(found.nodeIndex, found.relayIndex, found.fingerprint);
+    } else {
+      if (isInitialLoad || isDateChange) {
+        setRelayError(isDateChange ? 'Relay not available for this date' : 'Relay not found in current data');
+      }
+      updateRelayFingerprint(null);
+    }
+  }, [searchIndex, focusRelay]);
+
+  // Handle relay deep link from URL on mount and date changes
+  useEffect(() => {
+    // Wait for data to be loaded (searchIndex is empty until relayData.nodes loads)
+    if (searchIndex.length === 0) return;
+
+    const isInitialLoad = !initialRelayProcessedRef.current;
+    const isDateChange = previousDateRef.current !== null && previousDateRef.current !== currentDate;
+
+    // Only process on initial load or date change
+    if (isInitialLoad || isDateChange) {
+      processRelayFromUrl(isInitialLoad, isDateChange);
+    }
+
+    initialRelayProcessedRef.current = true;
+    previousDateRef.current = currentDate;
+  }, [searchIndex, currentDate, processRelayFromUrl]);
+
+  // Listen for hash changes (browser back/forward)
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (searchIndex.length === 0) return;
+      processRelayFromUrl(false, false);
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [searchIndex, processRelayFromUrl]);
 
   // Visible nodes change from particle worker
   const handleVisibleNodesChange = useCallback(
@@ -521,6 +597,11 @@ export default function TorMap() {
           </>
         )}
 
+      {/* Relay error toast */}
+      {relayError && (
+        <ErrorToast message={relayError} onDismiss={() => setRelayError(null)} />
+      )}
+
       {/* Relay tooltip */}
       <RelayTooltip
         ref={relaySelection.tooltipRef}
@@ -559,7 +640,7 @@ export default function TorMap() {
           {/* Relay Search */}
         <div className={`absolute top-4 z-10 ${isMobile ? 'left-4 right-14' : 'right-16 w-72'}`}>
           <RelaySearch
-            nodes={relayData?.nodes ?? []}
+            searchIndex={searchIndex}
             onSelectRelay={focusRelay}
             disabled={!hasRelayNodes || loading}
           />

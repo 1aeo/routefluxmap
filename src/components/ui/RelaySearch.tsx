@@ -4,9 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { AggregatedNode } from '../../lib/types';
 import {
-  buildSearchIndex,
   searchRelays,
   filterByNicknameAndFingerprint,
   getRelayCountForNickname,
@@ -29,7 +27,7 @@ const RELAY_TYPE_COLORS = {
 const TYPE_LABELS = { exit: 'Exit', guard: 'Guard', middle: 'Middle' } as const;
 
 interface RelaySearchProps {
-  nodes: AggregatedNode[];
+  searchIndex: SearchItem[];
   onSelectRelay: (nodeIndex: number, relayIndex: number, fingerprint: string) => void;
   disabled?: boolean;
 }
@@ -50,7 +48,7 @@ type FlatItem =
   | { type: 'group'; nickname: string; count: number }
   | { type: 'relay' | 'expanded'; item: SearchItem };
 
-export default function RelaySearch({ nodes, onSelectRelay, disabled = false }: RelaySearchProps) {
+export default function RelaySearch({ searchIndex, onSelectRelay, disabled = false }: RelaySearchProps) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -63,9 +61,6 @@ export default function RelaySearch({ nodes, onSelectRelay, disabled = false }: 
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const selectedItemRef = useRef<HTMLDivElement>(null);
-
-  // Build search index (memoized, only rebuilds when nodes change)
-  const searchIndex = useMemo(() => buildSearchIndex(nodes), [nodes]);
 
   // Debounce query updates
   useEffect(() => {

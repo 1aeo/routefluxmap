@@ -3,6 +3,8 @@
  * Handles parsing and updating URL hash parameters for state persistence
  */
 
+import { cleanFingerprint } from './relay-search';
+
 /**
  * Parse URL hash parameters into a key-value record
  *
@@ -185,4 +187,43 @@ export function parseCountryCode(): string | null {
  */
 export function updateCountryCode(code: string | null): void {
   updateUrlHash('CC', code?.toUpperCase() || '');
+}
+
+/** Regex to validate 40-character hex fingerprint (SHA-1) */
+const FINGERPRINT_REGEX = /^[0-9A-F]{40}$/;
+
+/** Result of parsing relay fingerprint from URL */
+export type RelayParamResult = 
+  | { status: 'none' }           // No relay parameter in URL
+  | { status: 'invalid' }        // Parameter exists but invalid format
+  | { status: 'valid'; fingerprint: string };  // Valid 40-char hex fingerprint
+
+/**
+ * Parse relay fingerprint from URL hash (relay parameter)
+ * Returns discriminated result to avoid double-parsing URL
+ * 
+ * @example
+ * // URL: https://example.com#relay=ABC123...
+ * getRelayParam() // { status: 'valid', fingerprint: 'ABC123...' }
+ */
+export function getRelayParam(): RelayParamResult {
+  const relay = getUrlHashParam('relay');
+  if (relay === undefined) return { status: 'none' };
+  
+  const cleaned = cleanFingerprint(relay);
+  return FINGERPRINT_REGEX.test(cleaned) 
+    ? { status: 'valid', fingerprint: cleaned }
+    : { status: 'invalid' };
+}
+
+/**
+ * Update relay fingerprint in URL hash
+ * Pass null or empty string to remove
+ * 
+ * @example
+ * updateRelayFingerprint('ABC123...') // Sets #relay=ABC123...
+ * updateRelayFingerprint(null) // Removes relay param
+ */
+export function updateRelayFingerprint(fingerprint: string | null): void {
+  updateUrlHash('relay', fingerprint ? cleanFingerprint(fingerprint) : '');
 }

@@ -273,3 +273,23 @@ export function getRelayCountForNickname(nickname: string, index: SearchItem[]):
   }
   return count;
 }
+
+/**
+ * Find a relay by its fingerprint (exact match)
+ * Used for URL deep linking - linear search is acceptable since this is only called on URL load/hash changes
+ * 
+ * @param index - Search index to search through
+ * @param fingerprint - Fingerprint to find (will be cleaned and uppercased)
+ * @returns SearchItem if found, null otherwise
+ */
+export function findRelayByFingerprint(index: SearchItem[], fingerprint: string): SearchItem | null {
+  const cleaned = cleanFingerprint(fingerprint);
+  
+  for (let i = 0, len = index.length; i < len; i++) {
+    if (index[i].fingerprintClean === cleaned) {
+      return index[i];
+    }
+  }
+  
+  return null;
+}
