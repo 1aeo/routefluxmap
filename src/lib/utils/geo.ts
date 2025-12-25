@@ -387,4 +387,87 @@ export function getCountryCoords(countryCode?: string): { lat: number; lng: numb
   };
 }
 
+/** Pre-computed centroid entries for O(1) iteration */
+const CENTROID_ENTRIES = Object.entries(countryCentroids);
+
+/**
+ * Find nearest country code for a given coordinate using centroid distance.
+ * Fast O(n) scan over ~200 countries using squared distance (no sqrt).
+ */
+export function findNearestCountry(lng: number, lat: number): string | null {
+  let minDist = Infinity;
+  let nearest: string | null = null;
+  
+  for (const [code, centroid] of CENTROID_ENTRIES) {
+    const dx = lng - centroid[0];
+    const dy = lat - centroid[1];
+    const dist = dx * dx + dy * dy;
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = code;
+    }
+  }
+  
+  return nearest;
+}
+
+/** Country statistics from relay aggregation */
+export interface CountryRelayStats {
+  relayCount: number;
+  bandwidth: number;
+}
+
+/** Cache for country relay stats (computed once per RelayData reference) */
+const countryStatsCache = new WeakMap<object, Map<string, CountryRelayStats>>();
+/** Shared empty map to avoid allocations */
+const EMPTY_STATS_MAP: Map<string, CountryRelayStats> = new Map();
+
+/** Relay node shape required for aggregation */
+interface RelayNode {
+  lng: number;
+  lat: number;
+  relays: { length: number };
+  bandwidth: number;
+}
+
+/**
+ * Build a map of country code -> relay statistics from relay nodes.
+ * Cached per cacheKey object reference for efficiency.
+ */
+export function getCountryRelayStats(
+  nodes: RelayNode[] | null | undefined,
+  cacheKey: object | null
+): Map<string, CountryRelayStats> {
+  if (!nodes?.length) return EMPTY_STATS_MAP;
+  
+  // Check cache first
+  if (cacheKey) {
+    const cached = countryStatsCache.get(cacheKey);
+    if (cached) return cached;
+  }
+  
+  // Build the map
+  const stats = new Map<string, CountryRelayStats>();
+  
+  for (const node of nodes) {
+    const code = findNearestCountry(node.lng, node.lat);
+    if (!code) continue;
+    
+    const existing = stats.get(code);
+    if (existing) {
+      existing.relayCount += node.relays.length;
+      existing.bandwidth += node.bandwidth;
+    } else {
+      stats.set(code, { relayCount: node.relays.length, bandwidth: node.bandwidth });
+    }
+  }
+  
+  // Cache result
+  if (cacheKey) {
+    countryStatsCache.set(cacheKey, stats);
+  }
+  
+  return stats;
+}
+
 

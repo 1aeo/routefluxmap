@@ -12,8 +12,8 @@
 
 import { useCallback, useRef, useEffect, useMemo } from 'react';
 import type { RefObject } from 'react';
-import { type CountryHistogram, getCountryClientData, formatRange, TOOLTIP_OFFSET } from '../types';
-import { findCountryAtLocation, countryCentroids } from '../utils/geo';
+import { type CountryHistogram, getCountryClientData, formatRange, TOOLTIP_OFFSET, type RelayData } from '../types';
+import { findCountryAtLocation, countryCentroids, getCountryRelayStats } from '../utils/geo';
 import { getCountryMetricsUrl } from '../config';
 
 /** Throttle interval for country hover detection (~15fps) */
@@ -50,7 +50,15 @@ interface TooltipElements {
   name: Element | null;
   count: Element | null;
   bounds: HTMLElement | null;
+  relays: HTMLElement | null;
   link: HTMLAnchorElement | null;
+}
+
+/** Get relay count for a country from shared cache */
+function getRelayCount(relayData: RelayData | null, countryCode: string): number {
+  if (!relayData?.nodes) return 0;
+  const stats = getCountryRelayStats(relayData.nodes, relayData);
+  return stats.get(countryCode.toUpperCase())?.relayCount || 0;
 }
 
 /** Set tooltip position and show (module-level for zero allocation) */
@@ -60,14 +68,35 @@ const setTooltipPosition = (el: HTMLElement, x: number, y: number): void => {
   el.style.opacity = '1';
 };
 
-/** Update tooltip count/bounds content (module-level pure function) */
-const updateTooltipContent = (els: TooltipElements, countryData: CountryHistogram, code: string): void => {
+/** Update tooltip content (module-level pure function) */
+const updateTooltipContent = (
+  els: TooltipElements, 
+  countryData: CountryHistogram, 
+  code: string,
+  relayData: RelayData | null
+): void => {
   const { count, lower, upper, hasBounds } = getCountryClientData(countryData, code);
+  const relayCount = getRelayCount(relayData, code);
+  const hasRelays = relayCount > 0;
   
+  // Client count
   if (els.count) els.count.textContent = `${count.toLocaleString()} clients`;
+  
+  // Confidence bounds
   if (els.bounds) {
     els.bounds.textContent = hasBounds ? `Est. range: ${formatRange(lower, upper)}` : '';
     els.bounds.style.display = hasBounds ? '' : 'none';
+  }
+  
+  // Relay count (hidden if 0 or cache not ready)
+  if (els.relays) {
+    els.relays.textContent = hasRelays ? `${relayCount.toLocaleString()} relay${relayCount !== 1 ? 's' : ''}` : '';
+    els.relays.style.display = hasRelays ? '' : 'none';
+  }
+  
+  // Link to metrics (only shown for countries with relays)
+  if (els.link) {
+    els.link.style.display = hasRelays ? '' : 'none';
   }
 };
 
@@ -84,6 +113,7 @@ export interface MouseMoveOptions {
   unproject: (x: number, y: number) => [number, number] | null;
   project: (lng: number, lat: number) => [number, number] | null;
   countryData: CountryHistogram;
+  relayData?: RelayData | null;
 }
 
 /** Options for click handler */
@@ -101,7 +131,7 @@ export interface UseCountryHoverResult {
   handleClick: (event: React.MouseEvent, options: ClickOptions) => void;
   clearTooltip: () => void;
   /** Refresh tooltip content with new data (for when countryData changes during hover) */
-  refreshData: (countryData: CountryHistogram) => void;
+  refreshData: (countryData: CountryHistogram, relayData?: RelayData | null) => void;
 }
 
 /**
@@ -135,6 +165,7 @@ export function useCountryHover(): UseCountryHoverResult {
       name: tooltip.querySelector('.country-name'),
       count: tooltip.querySelector('.country-count'),
       bounds: tooltip.querySelector('.country-bounds') as HTMLElement | null,
+      relays: tooltip.querySelector('.country-relays') as HTMLElement | null,
       link: tooltip.querySelector('.country-link') as HTMLAnchorElement | null,
     };
   };
@@ -142,17 +173,15 @@ export function useCountryHover(): UseCountryHoverResult {
   // Cleanup throttle timer on unmount
   useEffect(() => clearThrottle, []);
 
-  /** Hide tooltip (lightweight, no element updates needed) */
+  /** Hide tooltip */
   const hideTooltip = useCallback(() => {
     hoverInfo.current = null;
-    if (tooltipRef.current) {
-      tooltipRef.current.style.opacity = '0';
-    }
+    if (tooltipRef.current) tooltipRef.current.style.opacity = '0';
   }, []);
 
   /** Update tooltip DOM directly (avoids React re-render) */
   const updateTooltip = useCallback(
-    (code: string, x: number, y: number, countryData: CountryHistogram) => {
+    (code: string, x: number, y: number, countryData: CountryHistogram, relayData: RelayData | null) => {
       const tooltip = tooltipRef.current;
       if (!tooltip) return;
       
@@ -161,14 +190,8 @@ export function useCountryHover(): UseCountryHoverResult {
       if (!els) return;
       
       if (els.name) els.name.textContent = code;
-      updateTooltipContent(els, countryData, code);
-      
-      // Show and update link
-      if (els.link) {
-        els.link.href = getCountryMetricsUrl(code);
-        els.link.style.display = '';
-      }
-      
+      if (els.link) els.link.href = getCountryMetricsUrl(code);
+      updateTooltipContent(els, countryData, code, relayData);
       setTooltipPosition(tooltip, x, y);
     },
     []
@@ -177,7 +200,7 @@ export function useCountryHover(): UseCountryHoverResult {
   /** Handle mouse move with throttling */
   const handleMouseMove = useCallback(
     (event: React.MouseEvent, options: MouseMoveOptions) => {
-      const { layerVisible, geojson, unproject, project, countryData } = options;
+      const { layerVisible, geojson, unproject, project, countryData, relayData } = options;
 
       // Clear tooltip and reset throttle if layer hidden
       if (!layerVisible || !geojson) {
@@ -226,7 +249,7 @@ export function useCountryHover(): UseCountryHoverResult {
 
           // Clamp to viewport bounds and show tooltip
           const [clampedX, clampedY] = clampToViewport(screenPos[0], screenPos[1]);
-          updateTooltip(code, clampedX, clampedY, countryData);
+          updateTooltip(code, clampedX, clampedY, countryData, relayData ?? null);
         } catch {
           // Silently ignore errors (e.g., stale viewport)
         }
@@ -258,23 +281,14 @@ export function useCountryHover(): UseCountryHoverResult {
   /** Clear tooltip state and reset throttle */
   const clearTooltip = useCallback(() => {
     clearThrottle();
-    hoverInfo.current = null;
-    if (tooltipRef.current) {
-      tooltipRef.current.style.opacity = '0';
-      if (elementsRef.current?.link) elementsRef.current.link.style.display = 'none';
-    }
-  }, []);
+    hideTooltip();
+  }, [hideTooltip]);
 
   /** Refresh tooltip content with new data (when data changes during active hover) */
-  const refreshData = useCallback((countryData: CountryHistogram) => {
-    // Early exit if no active hover (avoid getElements call)
+  const refreshData = useCallback((countryData: CountryHistogram, relayData?: RelayData | null) => {
     const info = hoverInfo.current;
-    if (!info) return;
-    
-    const els = elementsRef.current;
-    if (!els) return;
-    
-    updateTooltipContent(els, countryData, info.code);
+    if (!info || !elementsRef.current) return;
+    updateTooltipContent(elementsRef.current, countryData, info.code, relayData ?? null);
   }, []);
 
   // Memoize return object to prevent unnecessary re-renders in consumers

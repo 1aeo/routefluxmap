@@ -121,6 +121,11 @@ export const CountryTooltip = forwardRef<HTMLDivElement, CountryTooltipProps>(
       >
         <div className="font-medium text-purple-400 country-name">{countryCode}</div>
         <div className="text-gray-400 country-count">{countStr} clients</div>
+        {/* Relay count - shown dynamically via DOM manipulation */}
+        <div 
+          className="text-gray-300 text-xs country-relays"
+          style={{ display: 'none' }}
+        />
         {/* Always render bounds element so DOM ref caching works; hide via display:none */}
         <div 
           className="text-gray-500 text-xs country-bounds"
@@ -128,16 +133,16 @@ export const CountryTooltip = forwardRef<HTMLDivElement, CountryTooltipProps>(
         >
           Est. range: {formatRange(lower, upper)}
         </div>
-        {/* Link to metrics site - shown dynamically via DOM manipulation */}
+        {/* Link to metrics site - shown only when country has relays */}
         <a
           className="country-link text-tor-green hover:text-tor-green-dim text-xs mt-1 inline-flex items-center gap-1 hover:underline transition-colors"
           href=""
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="View country details on metrics site"
+          aria-label="View relays in country on metrics site"
           style={{ display: 'none' }}
         >
-          View country details
+          View relays in country
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={EXTERNAL_LINK_PATH} />
           </svg>

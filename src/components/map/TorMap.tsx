@@ -10,7 +10,7 @@ import DeckGL from '@deck.gl/react';
 import { Map } from 'react-map-gl/maplibre';
 import type { AggregatedNode } from '../../lib/types';
 import { config } from '../../lib/config';
-import { countryCentroids, findCountryAtLocation } from '../../lib/utils/geo';
+import { countryCentroids, findCountryAtLocation, findNearestCountry } from '../../lib/utils/geo';
 import { formatMapLocation, updateUrlHash, getRelayParam, updateRelayFingerprint } from '../../lib/utils/url';
 import { buildSearchIndex, findRelayByFingerprint } from '../../lib/utils/relay-search';
 
@@ -93,8 +93,8 @@ export default function TorMap() {
 
   // Refresh country tooltip when data changes (e.g., during playback)
   useEffect(() => {
-    countryHover.refreshData(countryData);
-  }, [countryData, countryHover]);
+    countryHover.refreshData(countryData, relayData);
+  }, [countryData, relayData, countryHover]);
 
   // Layer visibility with callbacks
   const layerVisibilityCallbacks = useMemo(
@@ -226,26 +226,17 @@ export default function TorMap() {
       visibleNodeIndices.size > 0 && indicesDataVersion === dataVersion;
 
     if (pathMode === 'country') {
-      // Aggregate by country
+      // Aggregate by country using shared findNearestCountry
       const groups: Record<
         string,
         { relays: typeof relayData.nodes[0]['relays']; bandwidth: number; nodeIndices: number[] }
       > = {};
-    const entries = Object.entries(countryCentroids);
     
     for (let i = 0; i < relayData.nodes.length; i++) {
       const { lng, lat, relays, bandwidth } = relayData.nodes[i];
-        let minDist = Infinity,
-          nearest = '';
-      for (const [code, [cLng, cLat]] of entries) {
-        const dist = (lng - cLng) ** 2 + (lat - cLat) ** 2;
-          if (dist < minDist) {
-            minDist = dist;
-            nearest = code;
-          }
-      }
+      const nearest = findNearestCountry(lng, lat);
       if (!nearest) continue;
-        const g = (groups[nearest] ||= { relays: [], bandwidth: 0, nodeIndices: [] });
+      const g = (groups[nearest] ||= { relays: [], bandwidth: 0, nodeIndices: [] });
       g.relays.push(...relays);
       g.bandwidth += bandwidth;
       g.nodeIndices.push(i);
@@ -319,9 +310,10 @@ export default function TorMap() {
         unproject: unprojectCoords,
         project: projectCoords,
         countryData,
+        relayData,
       });
     },
-    [countryHover, countryInteractionsEnabled, countryGeojson, unprojectCoords, projectCoords, countryData]
+    [countryHover, countryInteractionsEnabled, countryGeojson, unprojectCoords, projectCoords, countryData, relayData]
   );
 
   const handleCountryClick = useCallback(
