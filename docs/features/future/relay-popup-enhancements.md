@@ -131,24 +131,38 @@ Onionoo's `/details` endpoint provides many fields we ignore:
 
 #### 1. AS Information
 
-Show hosting provider info — useful for understanding network diversity.
+Show hosting provider info — useful for understanding network diversity. Link AS numbers to detailed AS analytics on metrics.1aeo.com.
 
 ```tsx
-// In RelayPopup
-<div className="text-xs text-gray-500">
-  {relay.as_name && (
-    <span>{relay.as} — {relay.as_name}</span>
-  )}
-</div>
+// In RelayPopup.tsx
+{relay.as && (
+  <div className="text-xs text-gray-500">
+    <a
+      href={`https://metrics.1aeo.com/AS/${relay.as.replace('AS', '')}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-tor-green hover:underline"
+      title={`View all relays in ${relay.as}`}
+    >
+      {relay.as}
+    </a>
+    {relay.asName && <span className="text-gray-400"> — {relay.asName}</span>}
+  </div>
+)}
 ```
+
+**Why link to metrics.1aeo.com/AS/?**
+- Shows all relays hosted by this AS (network diversity analysis)
+- Historical AS relay counts and bandwidth contribution
+- Helps identify hosting concentration risks
 
 **Data pipeline change:**
 ```typescript
-// In OnionooRelay interface
+// In OnionooRelay interface (scripts/fetch-all-data.ts)
 interface OnionooRelay {
   // ... existing fields
-  as?: string;
-  as_name?: string;
+  as?: string;      // e.g., "AS24940"
+  as_name?: string; // e.g., "Hetzner Online GmbH"
 }
 ```
 
@@ -366,8 +380,143 @@ Popup is already constrained. Consider:
 
 ---
 
+## Implementation Guide: AS Information
+
+Detailed step-by-step for implementing AS information (Tier 1 enhancement).
+
+### Step 1: Update Data Fetching (`scripts/fetch-all-data.ts`)
+
+**1a. Add fields to OnionooRelay interface (~line 93):**
+
+```typescript
+interface OnionooRelay {
+  nickname: string;
+  fingerprint: string;
+  or_addresses: string[];
+  country?: string;
+  flags?: string[];
+  observed_bandwidth?: number;
+  as?: string;       // ADD: e.g., "AS24940"
+  as_name?: string;  // ADD: e.g., "Hetzner Online GmbH"
+}
+```
+
+**1b. Extract AS fields in processOnionooRelays (~line 557):**
+
+```typescript
+aggregated.get(key)!.relays.push({
+  nickname: relay.nickname || 'Unnamed',
+  fingerprint: normalizeFingerprint(relay.fingerprint),
+  bandwidth: (relay.observed_bandwidth || 0) / maxBw,
+  flags: mapFlags(relay.flags),
+  ip: addr.ip,
+  port: addr.port,
+  as: relay.as,           // ADD
+  asName: relay.as_name,  // ADD
+});
+```
+
+### Step 2: Update Type Definitions (`src/lib/types.ts`)
+
+**Add optional AS fields to RelayInfo (~line 6):**
+
+```typescript
+export interface RelayInfo {
+  nickname: string;
+  fingerprint: string;
+  bandwidth: number;
+  flags: string;
+  ip: string;
+  port: string;
+  as?: string;      // ADD: AS number (e.g., "AS24940")
+  asName?: string;  // ADD: AS organization name
+}
+```
+
+### Step 3: Update Config for AS Metrics URL (`src/lib/config.ts`)
+
+**Add AS metrics URL helper:**
+
+```typescript
+// Add near getRelayMetricsUrl function
+export function getASMetricsUrl(as: string): string {
+  // Strip "AS" prefix if present for URL
+  const asNumber = as.replace(/^AS/i, '');
+  return `https://metrics.1aeo.com/AS/${asNumber}`;
+}
+```
+
+### Step 4: Update Relay Popup (`src/components/ui/RelayPopup.tsx`)
+
+**4a. Import the new helper:**
+
+```typescript
+import { config, getRelayMetricsUrl, getASMetricsUrl } from '../../lib/config';
+```
+
+**4b. Add AS display in the relay item (~after line 144, inside the relay map):**
+
+```tsx
+<div className="ml-6 space-y-1">
+  <div className="text-xs text-gray-500 font-mono">{relay.ip}:{relay.port}</div>
+  
+  {/* ADD: AS Information with link */}
+  {relay.as && (
+    <div className="text-xs">
+      <a
+        href={getASMetricsUrl(relay.as)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-tor-green hover:underline"
+        title={`View all relays in ${relay.as}`}
+      >
+        {relay.as}
+      </a>
+      {relay.asName && <span className="text-gray-500"> — {relay.asName}</span>}
+    </div>
+  )}
+  
+  <a
+    href={getRelayMetricsUrl(relay.fingerprint)}
+    // ... existing metrics link
+```
+
+### Step 5: Handle Historical Data Gracefully
+
+AS information is only available from Onionoo (current/recent dates), not from Collector (historical). The UI should gracefully hide the AS row when data isn't available:
+
+```tsx
+{/* AS info - only shows when available (Onionoo data) */}
+{relay.as && (
+  // ... AS display component
+)}
+```
+
+No special handling needed — the conditional render already handles missing data.
+
+### Data Flow Summary
+
+```
+Onionoo API ──► fetch-all-data.ts ──► relays-YYYY-MM-DD.json ──► RelayPopup.tsx
+    │                  │                        │                      │
+    │ as: "AS24940"    │ Extract & store        │ as: "AS24940"        │ Display with
+    │ as_name: "..."   │ in RelayInfo           │ asName: "..."        │ link to metrics
+```
+
+### Testing Checklist
+
+- [ ] Current date shows AS info with clickable link
+- [ ] Historical date hides AS row (no errors)
+- [ ] AS link opens metrics.1aeo.com/AS/{number} correctly
+- [ ] AS number without "AS" prefix works in URL
+- [ ] Long AS names truncate properly
+- [ ] Mobile layout handles AS row
+
+---
+
 ## References
 
 - Onionoo Protocol: https://metrics.torproject.org/onionoo.html
 - Onionoo Details Doc: https://onionoo.torproject.org/details
+- AS Metrics (1aeo): https://metrics.1aeo.com/AS/{number} — Detailed AS relay analytics
 - Current RelayPopup: `src/components/ui/RelayPopup.tsx`
