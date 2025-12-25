@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getRelayMetricsUrl, getParticleZoomScale, config } from '../../src/lib/config';
+import { getRelayMetricsUrl, getCountryMetricsUrl, getParticleZoomScale, config } from '../../src/lib/config';
 
 describe('getRelayMetricsUrl', () => {
   it('generates correct URL for valid uppercase fingerprint', () => {
@@ -33,6 +33,44 @@ describe('getRelayMetricsUrl', () => {
     const fp = '7E AA C4 D0 E1 AC 54 E8 88 C4 9F 2F 0C 6B F5 B2 DD FB 4C 4A';
     const url = getRelayMetricsUrl(fp);
     expect(url).not.toContain(' ');
+  });
+});
+
+describe('getCountryMetricsUrl', () => {
+  it('generates correct URL for valid uppercase code', () => {
+    const url = getCountryMetricsUrl('US');
+    expect(url).toContain('/country/US/');
+  });
+
+  it('normalizes lowercase to uppercase', () => {
+    const url = getCountryMetricsUrl('de');
+    expect(url).toContain('/country/DE/');
+  });
+
+  it('strips invalid characters', () => {
+    expect(getCountryMetricsUrl('U-S')).toContain('/country/US/');
+    expect(getCountryMetricsUrl('U S')).toContain('/country/US/');
+    expect(getCountryMetricsUrl('U.S.')).toContain('/country/US/');
+  });
+
+  it('returns fallback for invalid length (too short)', () => {
+    const url = getCountryMetricsUrl('X');
+    expect(url).toMatch(/\/country\/$/);
+  });
+
+  it('returns fallback for invalid length (too long)', () => {
+    const url = getCountryMetricsUrl('USA');
+    expect(url).toMatch(/\/country\/$/);
+  });
+
+  it('returns fallback for empty string', () => {
+    const url = getCountryMetricsUrl('');
+    expect(url).toMatch(/\/country\/$/);
+  });
+
+  it('handles mixed case correctly', () => {
+    expect(getCountryMetricsUrl('uS')).toContain('/country/US/');
+    expect(getCountryMetricsUrl('Us')).toContain('/country/US/');
   });
 });
 

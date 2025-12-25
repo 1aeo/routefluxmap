@@ -131,6 +131,11 @@ export function isMobile(): boolean {
   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 }
 
+// Pre-compiled regex patterns for URL helpers (avoid recompilation on each call)
+const FINGERPRINT_CLEAN_REGEX = /[$:\s-]/g;
+const FINGERPRINT_VALID_REGEX = /^[0-9A-F]{40}$/;
+const COUNTRY_CODE_CLEAN_REGEX = /[^A-Za-z]/g;
+
 // Helper to build metrics relay URL
 export function getRelayMetricsUrl(fingerprint: string): string {
   // Tor relay fingerprints must be:
@@ -141,18 +146,29 @@ export function getRelayMetricsUrl(fingerprint: string): string {
   
   // Clean the fingerprint: remove $, spaces, colons, and other separators
   const cleanFingerprint = fingerprint
-    .replace(/[$:\s-]/g, '')
+    .replace(FINGERPRINT_CLEAN_REGEX, '')
     .toUpperCase();
   
   // Strict validation: must be exactly 40 hex characters
   // This prevents any path traversal or injection attacks
-  if (!/^[0-9A-F]{40}$/.test(cleanFingerprint)) {
+  if (!FINGERPRINT_VALID_REGEX.test(cleanFingerprint)) {
     console.warn(`Invalid fingerprint format: ${fingerprint}`);
     // Return safe fallback URL - metrics site will show "not found"
     return `${config.metricsUrl}/relay/0000000000000000000000000000000000000000`;
   }
   
   return `${config.metricsUrl}/relay/${cleanFingerprint}`;
+}
+
+// Helper to build metrics country URL
+export function getCountryMetricsUrl(countryCode: string): string {
+  // Country codes must be exactly 2 alphabetic characters (ISO 3166-1 alpha-2)
+  const cleaned = countryCode.replace(COUNTRY_CODE_CLEAN_REGEX, '').toUpperCase();
+  if (cleaned.length !== 2) {
+    console.warn(`Invalid country code: ${countryCode}`);
+    return `${config.metricsUrl}/country/`;
+  }
+  return `${config.metricsUrl}/country/${cleaned}/`;
 }
 
 export type Config = typeof config;

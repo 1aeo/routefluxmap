@@ -292,6 +292,12 @@ export default function TorMap() {
     return viewport ? viewport.unproject([x, y]) : null;
   }, []);
 
+  // Project geo coords to screen coords (for centroid positioning)
+  const projectCoords = useCallback((lng: number, lat: number): [number, number] | null => {
+    const viewport = deckRef.current?.deck?.getViewports()[0];
+    return viewport ? viewport.project([lng, lat]) : null;
+  }, []);
+
   // Handle click on relay with country lookup
   const handleRelayClick = useCallback(
     (info: any) => {
@@ -311,10 +317,11 @@ export default function TorMap() {
         layerVisible: countryInteractionsEnabled,
         geojson: countryGeojson,
         unproject: unprojectCoords,
+        project: projectCoords,
         countryData,
       });
     },
-    [countryHover, countryInteractionsEnabled, countryGeojson, unprojectCoords, countryData]
+    [countryHover, countryInteractionsEnabled, countryGeojson, unprojectCoords, projectCoords, countryData]
   );
 
   const handleCountryClick = useCallback(
@@ -622,14 +629,14 @@ export default function TorMap() {
         />
       )}
 
-      {/* Country tooltip */}
+      {/* Country tooltip - pinned to country centroid, interactive for link clicks */}
       <CountryTooltip
         ref={countryHover.tooltipRef}
         countryCode=""
         countryData={countryData}
         x={0}
         y={0}
-        style={{ opacity: 0, pointerEvents: 'none', zIndex: 60 }}
+        style={{ opacity: 0, zIndex: 60 }}
       />
 
       {/* UI Components - hidden in cinema mode */}

@@ -20,6 +20,9 @@ interface CountryLayerOptions {
 const NO_DATA_COLOR: [number, number, number, number] = [26, 26, 46, 50];
 const LINE_COLOR: [number, number, number, number] = [0, 100, 50, 100];
 
+// SVG path for external link icon (matches RelayPopup)
+const EXTERNAL_LINK_PATH = "M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14";
+
 // Color ramp: dark (#1a1a2e, a=100) → green (#00ff88, a=255)
 // Pre-computed deltas for efficient interpolation
 const COLOR_BASE = [26, 26, 46, 100] as const;
@@ -113,7 +116,7 @@ export const CountryTooltip = forwardRef<HTMLDivElement, CountryTooltipProps>(
     return (
       <div
         ref={ref}
-        className="absolute pointer-events-none bg-black/90 text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-purple-500/30 z-10 transition-opacity duration-75"
+        className="absolute bg-black/90 text-white text-sm px-3 py-2 rounded-lg shadow-lg border border-purple-500/30 z-10 transition-opacity duration-75"
         style={{ left: x + TOOLTIP_OFFSET, top: y + TOOLTIP_OFFSET, ...style }}
       >
         <div className="font-medium text-purple-400 country-name">{countryCode}</div>
@@ -125,6 +128,20 @@ export const CountryTooltip = forwardRef<HTMLDivElement, CountryTooltipProps>(
         >
           Est. range: {formatRange(lower, upper)}
         </div>
+        {/* Link to metrics site - shown dynamically via DOM manipulation */}
+        <a
+          className="country-link text-tor-green hover:text-tor-green-dim text-xs mt-1 inline-flex items-center gap-1 hover:underline transition-colors"
+          href=""
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="View country details on metrics site"
+          style={{ display: 'none' }}
+        >
+          View country details
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={EXTERNAL_LINK_PATH} />
+          </svg>
+        </a>
       </div>
     );
   }
