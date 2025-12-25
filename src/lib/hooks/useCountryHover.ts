@@ -113,22 +113,34 @@ export function useCountryHover(): UseCountryHoverResult {
   const throttleTimerRef = useRef<number | null>(null);
   const elementsRef = useRef<TooltipElements | null>(null);
   
-  /** Get cached tooltip elements (lazy initialization) */
+  /** Clear pending throttle timer */
+  const clearThrottle = () => {
+    if (throttleTimerRef.current) {
+      clearTimeout(throttleTimerRef.current);
+      throttleTimerRef.current = null;
+    }
+  };
+  
+  /** Get tooltip elements, re-querying if stale */
   const getElements = (): TooltipElements | null => {
-    if (!tooltipRef.current) return null;
-    // Cache on first access
+    const tooltip = tooltipRef.current;
+    if (!tooltip) return null;
+    
+    // Re-query if cached elements are detached from DOM
+    if (elementsRef.current?.name && !tooltip.contains(elementsRef.current.name)) {
+      elementsRef.current = null;
+    }
+    
     return elementsRef.current ??= {
-      name: tooltipRef.current.querySelector('.country-name'),
-      count: tooltipRef.current.querySelector('.country-count'),
-      bounds: tooltipRef.current.querySelector('.country-bounds') as HTMLElement | null,
-      link: tooltipRef.current.querySelector('.country-link') as HTMLAnchorElement | null,
+      name: tooltip.querySelector('.country-name'),
+      count: tooltip.querySelector('.country-count'),
+      bounds: tooltip.querySelector('.country-bounds') as HTMLElement | null,
+      link: tooltip.querySelector('.country-link') as HTMLAnchorElement | null,
     };
   };
 
   // Cleanup throttle timer on unmount
-  useEffect(() => () => {
-    if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
-  }, []);
+  useEffect(() => clearThrottle, []);
 
   /** Hide tooltip (lightweight, no element updates needed) */
   const hideTooltip = useCallback(() => {
@@ -167,8 +179,9 @@ export function useCountryHover(): UseCountryHoverResult {
     (event: React.MouseEvent, options: MouseMoveOptions) => {
       const { layerVisible, geojson, unproject, project, countryData } = options;
 
-      // Clear tooltip if layer hidden
+      // Clear tooltip and reset throttle if layer hidden
       if (!layerVisible || !geojson) {
+        clearThrottle();
         if (hoverInfo.current) hideTooltip();
         return;
       }
@@ -181,40 +194,42 @@ export function useCountryHover(): UseCountryHoverResult {
       // Skip if throttled
       if (throttleTimerRef.current) return;
 
-      // Access native event properties directly (avoid destructuring allocation)
-      const nativeEvent = event.nativeEvent;
-      const offsetX = nativeEvent.offsetX;
-      const offsetY = nativeEvent.offsetY;
+      // Capture coordinates synchronously
+      const { offsetX, offsetY } = event.nativeEvent;
 
       throttleTimerRef.current = window.setTimeout(() => {
         throttleTimerRef.current = null;
 
-        const coords = unproject(offsetX, offsetY);
-        if (!coords) return;
+        try {
+          const coords = unproject(offsetX, offsetY);
+          if (!coords) return;
 
-        const country = findCountryAtLocation(coords[0], coords[1], geojson);
-        const code = country?.code ?? null;
-        const prevCode = hoverInfo.current?.code ?? null;
+          const country = findCountryAtLocation(coords[0], coords[1], geojson);
+          const code = country?.code ?? null;
+          const prevCode = hoverInfo.current?.code ?? null;
 
-        // Early exit if same country (centroid is fixed, no update needed)
-        if (code === prevCode) return;
+          // Early exit if same country
+          if (code === prevCode) return;
 
-        // Hide tooltip if moved off country
-        if (!code) {
-          hideTooltip();
-          return;
+          // Hide tooltip if moved off country
+          if (!code) {
+            hideTooltip();
+            return;
+          }
+
+          // Get centroid and project to screen coordinates
+          const centroid = countryCentroids[code];
+          if (!centroid) return;
+
+          const screenPos = project(centroid[0], centroid[1]);
+          if (!screenPos) return;
+
+          // Clamp to viewport bounds and show tooltip
+          const [clampedX, clampedY] = clampToViewport(screenPos[0], screenPos[1]);
+          updateTooltip(code, clampedX, clampedY, countryData);
+        } catch {
+          // Silently ignore errors (e.g., stale viewport)
         }
-
-        // Get centroid and project to screen coordinates
-        const centroid = countryCentroids[code];
-        if (!centroid) return;
-
-        const screenPos = project(centroid[0], centroid[1]);
-        if (!screenPos) return;
-
-        // Clamp to viewport bounds and show tooltip
-        const [clampedX, clampedY] = clampToViewport(screenPos[0], screenPos[1]);
-        updateTooltip(code, clampedX, clampedY, countryData);
       }, HOVER_THROTTLE_MS);
     },
     [hideTooltip, updateTooltip]
@@ -225,13 +240,10 @@ export function useCountryHover(): UseCountryHoverResult {
     (event: React.MouseEvent, options: ClickOptions) => {
       const { layerVisible, geojson, unproject, onCountryClick } = options;
       if (!layerVisible || !geojson) return;
+      if (isEventInTooltip(event, tooltipRef.current)) return;
 
-      // Ignore clicks on the tooltip (let the link handle its own clicks)
-      if (isEventInTooltip(event, tooltipRef.current)) {
-        return;
-      }
-
-      const coords = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY);
+      const { offsetX, offsetY } = event.nativeEvent;
+      const coords = unproject(offsetX, offsetY);
       if (!coords) return;
 
       const country = findCountryAtLocation(coords[0], coords[1], geojson);
@@ -243,15 +255,13 @@ export function useCountryHover(): UseCountryHoverResult {
     []
   );
 
-  /** Clear tooltip state */
+  /** Clear tooltip state and reset throttle */
   const clearTooltip = useCallback(() => {
+    clearThrottle();
     hoverInfo.current = null;
     if (tooltipRef.current) {
       tooltipRef.current.style.opacity = '0';
-      // Reset link display state using cached element ref
-      if (elementsRef.current?.link) {
-        elementsRef.current.link.style.display = 'none';
-      }
+      if (elementsRef.current?.link) elementsRef.current.link.style.display = 'none';
     }
   }, []);
 

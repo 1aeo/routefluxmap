@@ -160,7 +160,7 @@ export const threeToTwo: Record<string, string> = Object.fromEntries(
  * Includes overseas territories for complete coverage
  */
 export const countryCentroids: Record<string, [number, number]> = {
-  // Countries A-Z
+  // Countries A-Z (main set)
   'AD': [1.52, 42.55], 'AE': [53.85, 23.42], 'AF': [67.71, 33.94], 'AL': [20.17, 41.15],
   'AM': [45.04, 40.07], 'AO': [17.87, -11.20], 'AR': [-63.62, -38.42], 'AT': [14.55, 47.52],
   'AU': [133.78, -25.27], 'AZ': [47.58, 40.14], 'BA': [17.68, 43.92], 'BD': [90.36, 23.68],
@@ -179,38 +179,182 @@ export const countryCentroids: Record<string, [number, number]> = {
   'SG': [103.82, 1.35], 'SI': [15.00, 46.15], 'SK': [19.70, 48.67], 'TH': [100.99, 15.87],
   'TR': [35.24, 38.96], 'TW': [120.96, 23.70], 'UA': [31.17, 48.38], 'US': [-95.71, 37.09],
   'VE': [-66.59, 6.42], 'VN': [108.28, 14.06], 'ZA': [22.94, -30.56],
-  // Additional countries in Americas
+  
+  // Americas
+  'AG': [-61.80, 17.06],  // Antigua and Barbuda
+  'AI': [-63.07, 18.22],  // Anguilla
+  'AW': [-69.97, 12.52],  // Aruba
+  'BB': [-59.54, 13.19],  // Barbados
+  'BL': [-62.83, 17.90],  // Saint Barthelemy
+  'BM': [-64.75, 32.32],  // Bermuda
   'BO': [-63.59, -16.29], // Bolivia
+  'BS': [-77.40, 25.03],  // Bahamas
+  'BZ': [-88.50, 17.19],  // Belize
   'CR': [-83.75, 9.75],   // Costa Rica
   'CU': [-77.78, 21.52],  // Cuba
+  'CW': [-68.99, 12.17],  // Curaçao
+  'DM': [-61.36, 15.41],  // Dominica
   'DO': [-70.16, 18.74],  // Dominican Republic
   'EC': [-78.18, -1.83],  // Ecuador
+  'FK': [-59.55, -51.80], // Falkland Islands
+  'GD': [-61.68, 12.12],  // Grenada
+  'GS': [-36.59, -54.43], // South Georgia
   'GT': [-90.23, 15.78],  // Guatemala
+  'GY': [-58.93, 4.86],   // Guyana
   'HN': [-86.24, 14.64],  // Honduras
+  'HT': [-72.29, 18.97],  // Haiti
   'JM': [-77.30, 18.11],  // Jamaica
+  'KN': [-62.75, 17.34],  // Saint Kitts and Nevis
+  'KY': [-81.25, 19.31],  // Cayman Islands
+  'LC': [-60.98, 13.91],  // Saint Lucia
+  'MS': [-62.19, 16.74],  // Montserrat
   'NI': [-85.21, 12.87],  // Nicaragua
   'PA': [-80.78, 8.54],   // Panama
   'PE': [-75.02, -9.19],  // Peru
   'PY': [-58.44, -23.44], // Paraguay
+  'SR': [-56.03, 3.92],   // Suriname
   'SV': [-88.90, 13.79],  // El Salvador
+  'SX': [-63.05, 18.04],  // Sint Maarten
+  'TC': [-71.80, 21.69],  // Turks and Caicos
   'TT': [-61.22, 10.69],  // Trinidad and Tobago
   'UY': [-55.77, -32.52], // Uruguay
-  // Additional African countries
+  'VC': [-61.20, 13.25],  // Saint Vincent and the Grenadines
+  'VG': [-64.64, 18.42],  // British Virgin Islands
+  
+  // Africa
+  'BF': [-1.56, 12.24],   // Burkina Faso
+  'BI': [29.92, -3.37],   // Burundi
+  'BJ': [2.32, 9.31],     // Benin
+  'BW': [24.68, -22.33],  // Botswana
+  'CD': [21.76, -4.04],   // Democratic Republic of the Congo
+  'CF': [20.94, 6.61],    // Central African Republic
+  'CG': [15.83, -0.23],   // Republic of the Congo
+  'CI': [-5.55, 7.54],    // Ivory Coast
+  'CM': [12.35, 7.37],    // Cameroon
+  'CV': [-24.01, 16.00],  // Cabo Verde
+  'DJ': [42.59, 11.83],   // Djibouti
   'DZ': [1.66, 28.03],    // Algeria
+  'EH': [-12.89, 24.22],  // Western Sahara
+  'ER': [39.78, 15.18],   // Eritrea
+  'ET': [40.49, 9.15],    // Ethiopia
+  'GA': [11.61, -0.80],   // Gabon
+  'GH': [-1.02, 7.95],    // Ghana
+  'GM': [-15.31, 13.44],  // Gambia
+  'GN': [-9.70, 9.95],    // Guinea
+  'GQ': [10.27, 1.65],    // Equatorial Guinea
+  'GW': [-15.18, 11.80],  // Guinea-Bissau
   'KE': [37.91, -0.02],   // Kenya
+  'LR': [-9.43, 6.43],    // Liberia
+  'LS': [28.23, -29.61],  // Lesotho
+  'LY': [17.23, 26.34],   // Libya
   'MA': [-7.09, 31.79],   // Morocco
+  'MG': [46.87, -18.77],  // Madagascar
+  'ML': [-3.99, 17.57],   // Mali
+  'MR': [-10.94, 21.01],  // Mauritania
+  'MU': [57.55, -20.35],  // Mauritius
+  'MW': [34.30, -13.25],  // Malawi
+  'MZ': [35.53, -18.67],  // Mozambique
+  'NA': [18.49, -22.96],  // Namibia
+  'NE': [8.08, 17.61],    // Niger
   'NG': [8.68, 9.08],     // Nigeria
+  'RW': [29.87, -1.94],   // Rwanda
+  'SC': [55.45, -4.68],   // Seychelles
+  'SD': [30.22, 12.86],   // Sudan
+  'SH': [-5.72, -15.93],  // Saint Helena
+  'SL': [-11.78, 8.46],   // Sierra Leone
+  'SN': [-14.45, 14.50],  // Senegal
+  'SO': [46.20, 5.15],    // Somalia
+  'SS': [31.31, 6.88],    // South Sudan
+  'ST': [6.61, 0.19],     // São Tomé and Príncipe
+  'SZ': [31.47, -26.52],  // eSwatini
+  'TD': [18.73, 15.45],   // Chad
+  'TG': [0.82, 8.62],     // Togo
   'TN': [9.54, 33.89],    // Tunisia
-  // Additional Asian countries
+  'TZ': [34.89, -6.37],   // Tanzania
+  'UG': [32.29, 1.37],    // Uganda
+  'ZM': [27.85, -13.13],  // Zambia
+  'ZW': [29.15, -19.02],  // Zimbabwe
+  
+  // Middle East and Central Asia
+  'BH': [50.64, 26.07],   // Bahrain
   'IQ': [43.68, 33.22],   // Iraq
+  'JO': [36.24, 30.59],   // Jordan
+  'KG': [74.77, 41.20],   // Kyrgyzstan
+  'KW': [47.48, 29.31],   // Kuwait
   'LB': [35.86, 33.87],   // Lebanon
+  'OM': [55.92, 21.51],   // Oman
+  'PS': [35.25, 31.95],   // Palestine
+  'QA': [51.18, 25.35],   // Qatar
+  'SA': [45.08, 23.89],   // Saudi Arabia
+  'SY': [38.20, 34.80],   // Syria
+  'TJ': [71.28, 38.86],   // Tajikistan
+  'TM': [59.56, 38.97],   // Turkmenistan
+  'UZ': [64.59, 41.38],   // Uzbekistan
+  'YE': [48.52, 15.55],   // Yemen
+  
+  // South and Southeast Asia
+  'BN': [114.73, 4.54],   // Brunei
+  'BT': [90.43, 27.51],   // Bhutan
+  'KH': [104.99, 12.57],  // Cambodia
+  'KP': [127.51, 40.34],  // North Korea
+  'LA': [102.50, 19.86],  // Laos
+  'LK': [80.77, 7.87],    // Sri Lanka
+  'MM': [95.96, 21.91],   // Myanmar
+  'MN': [103.85, 46.86],  // Mongolia
+  'MO': [113.54, 22.20],  // Macao
+  'MV': [73.22, 3.20],    // Maldives
+  'NP': [84.12, 28.39],   // Nepal
   'PH': [121.77, 12.88],  // Philippines
   'PK': [69.35, 30.38],   // Pakistan
-  'SA': [45.08, 23.89],   // Saudi Arabia
-  // Additional European countries
+  
+  // Europe
+  'AX': [19.95, 60.20],   // Aland
   'CY': [33.43, 35.13],   // Cyprus
+  'FO': [-6.91, 61.89],   // Faroe Islands
+  'GG': [-2.54, 49.45],   // Guernsey
+  'GI': [-5.35, 36.14],   // Gibraltar
+  'IM': [-4.55, 54.24],   // Isle of Man
+  'JE': [-2.13, 49.21],   // Jersey
+  'LI': [9.56, 47.17],    // Liechtenstein
+  'MC': [7.41, 43.74],    // Monaco
+  'ME': [19.37, 42.71],   // Montenegro
   'MK': [21.75, 41.51],   // North Macedonia
   'MT': [14.38, 35.94],   // Malta
+  'SM': [12.46, 43.94],   // San Marino
+  'VA': [12.45, 41.90],   // Vatican
+  
+  // Pacific Islands
+  'CK': [-159.79, -21.24],// Cook Islands
+  'FJ': [178.07, -17.71], // Fiji
+  'FM': [158.23, 6.88],   // Federated States of Micronesia
+  'KI': [-168.73, 1.87],  // Kiribati
+  'MH': [171.18, 7.13],   // Marshall Islands
+  'NF': [167.95, -29.04], // Norfolk Island
+  'NR': [166.93, -0.52],  // Nauru
+  'NU': [-169.87, -19.05],// Niue
+  'PG': [143.96, -6.31],  // Papua New Guinea
+  'PN': [-130.10, -25.07],// Pitcairn Islands
+  'PW': [134.58, 7.51],   // Palau
+  'SB': [160.16, -9.43],  // Solomon Islands
+  'TL': [125.73, -8.87],  // East Timor
+  'TO': [-175.20, -21.18],// Tonga
+  'TV': [179.20, -7.11],  // Tuvalu
+  'VU': [166.96, -15.38], // Vanuatu
+  'WS': [-172.10, -13.76],// Samoa
+  
+  // Other territories
+  'AQ': [0.00, -75.25],   // Antarctica
+  'BQ': [-68.26, 12.18],  // Bonaire, Sint Eustatius, Saba
+  'GL': [-42.60, 71.71],  // Greenland
+  'HM': [73.50, -53.08],  // Heard Island
+  'IO': [71.88, -6.34],   // British Indian Ocean Territory
+  'KM': [43.87, -11.88],  // Comoros
+  'TF': [69.35, -49.28],  // French Southern Lands
+  'TK': [-171.86, -9.20], // Tokelau
+  'UM': [-169.52, 19.28], // US Minor Outlying Islands
+  'MF': [-63.05, 18.08],  // Saint Martin (French)
+  'XK': [20.90, 42.60],   // Kosovo
+  
   // French overseas territories
   'GF': [-53.13, 3.93],   // French Guiana
   'GP': [-61.55, 16.25],  // Guadeloupe
@@ -221,6 +365,7 @@ export const countryCentroids: Record<string, [number, number]> = {
   'PF': [-149.41, -17.68],// French Polynesia
   'PM': [-56.33, 46.88],  // Saint Pierre and Miquelon
   'WF': [-176.20, -13.77],// Wallis and Futuna
+  
   // US territories
   'PR': [-66.59, 18.22],  // Puerto Rico
   'VI': [-64.90, 18.34],  // US Virgin Islands

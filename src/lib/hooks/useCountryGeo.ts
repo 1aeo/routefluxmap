@@ -17,27 +17,24 @@ import { threeToTwo } from '../utils/geo';
 const FALLBACK_GEO_COUNTRIES_COMMIT = 'b0b7794e15e7ec4374bf183dd73cce5b92e1c0ae';
 const FALLBACK_GEO_COUNTRIES_URL = `https://raw.githubusercontent.com/datasets/geo-countries/${FALLBACK_GEO_COUNTRIES_COMMIT}/data/countries.geojson`;
 
-// Territory code mappings for normalization
+// Territory code mappings for GeoJSON normalization
 const TERRITORY_MAP: Record<string, string> = {
-  'france': 'FR',
-  'norway': 'NO',
-  'french guiana': 'GF',
-  'guyane': 'GF',
-  'martinique': 'MQ',
-  'guadeloupe': 'GP',
-  'reunion': 'RE',
-  'réunion': 'RE',
-  'mayotte': 'YT',
-  'new caledonia': 'NC',
-  'french polynesia': 'PF',
-  'saint pierre': 'PM',
-  'wallis': 'WF',
-  'puerto rico': 'PR',
-  'guam': 'GU',
-  'u.s. virgin': 'VI',
-  'american samoa': 'AS',
-  'northern mariana': 'MP',
+  'france': 'FR', 'norway': 'NO', 'french guiana': 'GF', 'guyane': 'GF',
+  'martinique': 'MQ', 'guadeloupe': 'GP', 'reunion': 'RE', 'réunion': 'RE',
+  'mayotte': 'YT', 'new caledonia': 'NC', 'french polynesia': 'PF',
+  'saint pierre': 'PM', 'wallis': 'WF', 'puerto rico': 'PR', 'guam': 'GU',
+  'u.s. virgin': 'VI', 'american samoa': 'AS', 'northern mariana': 'MP',
 };
+
+// Legacy/regional GeoIP codes -> modern ISO codes (applied to country histogram data)
+// UK: non-standard, AN: dissolved 2010, CS: dissolved 2006, EU/AP: regional placeholders
+const LEGACY_CODE_MAP: Record<string, string> = {
+  'UK': 'GB', 'AN': 'CW', 'CS': 'RS', 'EU': 'DE', 'AP': 'ID',
+};
+
+// Pre-compiled regexes for country code validation
+const RE_2CHAR = /^[A-Za-z]{2}$/;
+const RE_3CHAR = /^[A-Za-z]{3}$/;
 
 export interface UseCountryGeoResult {
   /** GeoJSON FeatureCollection for country boundaries */
@@ -54,15 +51,12 @@ export interface UseCountryGeoResult {
 function processFeature(feature: any): void {
   const props = feature.properties || {};
   let code = props.iso_a2 || props.ISO_A2 || props.cc2 || props['ISO3166-1-Alpha-2'];
-  const isValidCode = code && /^[A-Za-z]{2}$/.test(code);
 
-  if (!isValidCode) {
+  if (!code || !RE_2CHAR.test(code)) {
     // Try 3-letter codes
-    const candidates3 = [
-      props.iso_a3, props.ISO_A3, props.adm0_a3,
-      props['ISO3166-1-Alpha-3'], props.sov_a3, props.gu_a3, props.su_a3
-    ];
-    const code3 = candidates3.find(c => c && typeof c === 'string' && /^[A-Za-z]{3}$/.test(c));
+    const candidates = [props.iso_a3, props.ISO_A3, props.adm0_a3,
+      props['ISO3166-1-Alpha-3'], props.sov_a3, props.gu_a3, props.su_a3];
+    const code3 = candidates.find(c => typeof c === 'string' && RE_3CHAR.test(c));
 
     if (code3 && threeToTwo[code3.toUpperCase()]) {
       code = threeToTwo[code3.toUpperCase()];
@@ -70,15 +64,12 @@ function processFeature(feature: any): void {
       // Try territory name matching
       const name = (props.name || props.NAME || props.admin || '').toLowerCase();
       for (const [pattern, territoryCode] of Object.entries(TERRITORY_MAP)) {
-        if (name.includes(pattern)) {
-          code = territoryCode;
-          break;
-        }
+        if (name.includes(pattern)) { code = territoryCode; break; }
       }
     }
   }
 
-  if (code && /^[A-Za-z]{2}$/.test(code)) {
+  if (code && RE_2CHAR.test(code)) {
     feature.properties.iso_a2 = code.toUpperCase();
   }
 }
@@ -170,8 +161,26 @@ export function useCountryGeo(currentDate: string | null): UseCountryGeoResult {
           console.info(`[useCountryGeo] Using fallback for country data ${currentDate}`);
         }
         
-        // data.countries is the CountryHistogram: { "US": 444507, "DE": 224891, ... }
-        setCountryData(data.countries || data as CountryHistogram);
+        const countries = data.countries || data as CountryHistogram;
+        
+        // Merge legacy codes into their modern equivalents
+        for (const [legacy, target] of Object.entries(LEGACY_CODE_MAP)) {
+          const src = countries[legacy];
+          if (!src) continue;
+          const dst = countries[target];
+          const sc = typeof src === 'number' ? src : src.count;
+          if (!dst) {
+            countries[target] = src;
+          } else if (typeof dst === 'number') {
+            countries[target] = dst + sc;
+          } else {
+            dst.count += sc;
+            if (typeof src !== 'number') { dst.lower += src.lower; dst.upper += src.upper; }
+          }
+          delete countries[legacy];
+        }
+        
+        setCountryData(countries);
       } catch (err) {
         console.warn('[useCountryGeo] Could not load country data:', err);
         setCountryData({});
