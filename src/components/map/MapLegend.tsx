@@ -48,13 +48,12 @@ export default function MapLegend({ isMobile, dateIndex }: MapLegendProps) {
           className="w-full h-full flex items-center justify-center text-tor-green"
           aria-label="Show legend"
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
+          {/* Legend icon - stacked colored circles representing relay types */}
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="7" cy="7" r="3" />
+            <circle cx="7" cy="17" r="3" opacity="0.6" />
+            <rect x="12" y="5.5" width="8" height="3" rx="1" opacity="0.8" />
+            <rect x="12" y="15.5" width="6" height="3" rx="1" opacity="0.5" />
           </svg>
         </button>
       ) : (
