@@ -11,6 +11,7 @@ interface LayerControlsProps {
   onVisibilityChange: (visibility: LayerVisibility) => void;
   showParticles?: boolean; // Only show particle toggle when implemented
   compact?: boolean; // Render without container (for embedding in other components)
+  horizontal?: boolean; // Render toggles in a horizontal row (for mobile header)
 }
 
 interface ToggleProps {
@@ -57,11 +58,43 @@ function Toggle({ label, icon, checked, onChange, color = '#00ff88' }: TogglePro
   );
 }
 
+/** Compact toggle for horizontal mobile layout */
+function CompactToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
+  const inputId = `compact-toggle-${label.toLowerCase().replace(/\s+/g, '-')}`;
+  return (
+    <label htmlFor={inputId} className="flex items-center gap-1.5 cursor-pointer group">
+      <div className="relative">
+        <input
+          type="checkbox"
+          id={inputId}
+          name={inputId}
+          checked={checked}
+          onChange={onChange}
+          className="sr-only"
+        />
+        <div className={`w-7 h-3.5 rounded-full transition-colors duration-200 ${checked ? 'bg-tor-green/30' : 'bg-gray-700'}`} />
+        <div 
+          className={`
+            absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full
+            transition-all duration-200 shadow-md
+            ${checked ? 'translate-x-3.5' : 'translate-x-0'}
+          `}
+          style={{ backgroundColor: checked ? '#00ff88' : '#666' }}
+        />
+      </div>
+      <span className="text-gray-400 group-hover:text-white transition-colors text-[11px]">
+        {label}
+      </span>
+    </label>
+  );
+}
+
 export default function LayerControls({
   visibility,
   onVisibilityChange,
   showParticles = false,
   compact = false,
+  horizontal = false,
 }: LayerControlsProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   
@@ -74,6 +107,32 @@ export default function LayerControls({
   
   // Compact mode: just toggles, no container
   if (compact) {
+    // Horizontal layout for mobile header integration
+    if (horizontal) {
+      return (
+        <div className="flex items-center gap-4 flex-wrap">
+          <CompactToggle
+            label="Relays"
+            checked={visibility.relays}
+            onChange={() => handleToggle('relays')}
+          />
+          <CompactToggle
+            label="Countries"
+            checked={visibility.countries}
+            onChange={() => handleToggle('countries')}
+          />
+          {showParticles && (
+            <CompactToggle
+              label="Traffic"
+              checked={visibility.particles}
+              onChange={() => handleToggle('particles')}
+            />
+          )}
+        </div>
+      );
+    }
+    
+    // Vertical layout (default compact)
     return (
       <div className="space-y-2">
         <Toggle

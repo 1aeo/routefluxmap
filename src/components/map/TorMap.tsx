@@ -634,16 +634,25 @@ export default function TorMap() {
       {/* UI Components - hidden in cinema mode */}
       {!cinemaMode && (
         <>
-          <MapHeader visibility={visibility} onVisibilityChange={handleVisibilityChange} />
-
-          {/* Relay Search */}
-        <div className={`absolute top-4 z-10 ${isMobile ? 'left-4 right-14' : 'right-16 w-72'}`}>
-          <RelaySearch
+          <MapHeader 
+            visibility={visibility} 
+            onVisibilityChange={handleVisibilityChange}
+            isMobile={isMobile}
             searchIndex={searchIndex}
             onSelectRelay={focusRelay}
-            disabled={!hasRelayNodes || loading}
+            searchDisabled={!hasRelayNodes || loading}
           />
-        </div>
+
+          {/* Relay Search - Desktop only (mobile search is in MapHeader) */}
+          {!isMobile && (
+            <div className="absolute top-4 right-16 w-72 z-10">
+              <RelaySearch
+                searchIndex={searchIndex}
+                onSelectRelay={focusRelay}
+                disabled={!hasRelayNodes || loading}
+              />
+            </div>
+          )}
 
           <MapLegend isMobile={isMobile} dateIndex={dateIndex} />
 
