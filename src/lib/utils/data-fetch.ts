@@ -14,8 +14,8 @@ interface FetchResult<T> {
   source: 'local' | 'primary' | 'fallback';
 }
 
-/** Default timeout for fetch requests (30 seconds) */
-const DEFAULT_FETCH_TIMEOUT_MS = 30000;
+/** Default timeout for fetch requests (60 seconds) */
+const DEFAULT_FETCH_TIMEOUT_MS = 60000;
 
 interface FetchOptions extends RequestInit {
   onProgress?: (progress: number) => void;
