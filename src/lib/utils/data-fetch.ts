@@ -68,6 +68,39 @@ async function fetchWithProgress<T>(url: string, options?: FetchOptions): Promis
 }
 
 /**
+ * Sanitize and validate path for data fetching
+ * Prevents path traversal and ensures safe characters only
+ */
+function sanitizePath(path: string): string {
+  if (!path || typeof path !== 'string') {
+    throw new Error('Invalid path');
+  }
+  
+  // Track if path originally started with /
+  const hadLeadingSlash = path.startsWith('/');
+  
+  // Remove path traversal attempts
+  let sanitized = path
+    .replace(/\.\.\//g, '')        // Remove ../
+    .replace(/\.\.$/g, '')         // Remove trailing ..
+    .replace(/^\/+/, '')           // Temporarily remove leading slashes for validation
+    .replace(/\0/g, '');           // Remove null bytes
+  
+  // Validate: only allow alphanumeric, dash, underscore, dot, and forward slash
+  if (sanitized && !/^[\w\-./]+$/.test(sanitized)) {
+    throw new Error('Path contains invalid characters');
+  }
+  
+  // Prevent hidden files
+  if (sanitized.startsWith('.') || sanitized.includes('/.')) {
+    throw new Error('Path cannot reference hidden files');
+  }
+  
+  // Restore leading slash if it was there (for absolute paths)
+  return hadLeadingSlash ? '/' + sanitized : sanitized;
+}
+
+/**
  * Fetch data with automatic fallback
  * 
  * Order of attempts:
@@ -79,11 +112,13 @@ export async function fetchWithFallback<T>(
   path: string,
   options?: FetchOptions
 ): Promise<FetchResult<T>> {
+  // Sanitize the path first
+  const safePath = sanitizePath(path);
   const errors: string[] = [];
 
   // 1. Try local first (for dev or bundled data)
   try {
-    const localPath = path.startsWith('/') ? path : `/data/${path}`;
+    const localPath = safePath.startsWith('/') ? safePath : `/data/${safePath}`;
     const data = await fetchWithProgress<T>(localPath, options);
     return { data, source: 'local' };
   } catch {
@@ -93,7 +128,7 @@ export async function fetchWithFallback<T>(
   // 2. Try primary data URL
   if (PRIMARY_DATA_URL) {
     try {
-      const url = `${PRIMARY_DATA_URL}/${path}`;
+      const url = `${PRIMARY_DATA_URL}/${safePath}`;
       const data = await fetchWithProgress<T>(url, options);
       return { data, source: 'primary' };
     } catch (err: any) {
@@ -104,9 +139,9 @@ export async function fetchWithFallback<T>(
   // 3. Try fallback data URL
   if (FALLBACK_DATA_URL) {
     try {
-      const url = `${FALLBACK_DATA_URL}/${path}`;
+      const url = `${FALLBACK_DATA_URL}/${safePath}`;
       const data = await fetchWithProgress<T>(url, options);
-      console.info(`[DataFetch] Using fallback for ${path}`);
+      console.info(`[DataFetch] Using fallback for ${safePath}`);
       return { data, source: 'fallback' };
     } catch (err: any) {
       errors.push(`Fallback (${err.message})`);
@@ -114,7 +149,7 @@ export async function fetchWithFallback<T>(
   }
 
   // All sources failed
-  throw new Error(`Failed to fetch ${path}: ${errors.join(', ')}`);
+  throw new Error(`Failed to fetch ${safePath}: ${errors.join(', ')}`);
 }
 
 /**
@@ -126,14 +161,44 @@ export async function fetchDataJson<T>(filename: string): Promise<T> {
 }
 
 /**
+ * Validate date string format (YYYY-MM-DD)
+ * Returns sanitized date or null if invalid
+ */
+function validateDateString(date: string): string | null {
+  // Strict date format: YYYY-MM-DD
+  const dateRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const match = date.match(dateRegex);
+  if (!match) return null;
+  
+  const [, year, month, day] = match;
+  const y = parseInt(year, 10);
+  const m = parseInt(month, 10);
+  const d = parseInt(day, 10);
+  
+  // Validate ranges
+  if (y < 2000 || y > 2100) return null;  // Reasonable year range
+  if (m < 1 || m > 12) return null;
+  if (d < 1 || d > 31) return null;
+  
+  // Return the canonical format
+  return `${year}-${month}-${day}`;
+}
+
+/**
  * Fetch relay data for a specific date
  */
 export async function fetchRelayData(date: string) {
+  // Validate and sanitize date input
+  const sanitizedDate = validateDateString(date);
+  if (!sanitizedDate) {
+    throw new Error(`Invalid date format: ${date}`);
+  }
+  
   // Try flat structure first, then current/ subdirectory
   try {
-    return await fetchWithFallback(`relays-${date}.json`);
+    return await fetchWithFallback(`relays-${sanitizedDate}.json`);
   } catch {
-    return await fetchWithFallback(`current/relays-${date}.json`);
+    return await fetchWithFallback(`current/relays-${sanitizedDate}.json`);
   }
 }
 
@@ -141,7 +206,13 @@ export async function fetchRelayData(date: string) {
  * Fetch country data for a specific date
  */
 export async function fetchCountryData(date: string) {
-  return await fetchWithFallback(`countries-${date}.json`);
+  // Validate and sanitize date input
+  const sanitizedDate = validateDateString(date);
+  if (!sanitizedDate) {
+    throw new Error(`Invalid date format: ${date}`);
+  }
+  
+  return await fetchWithFallback(`countries-${sanitizedDate}.json`);
 }
 
 /**

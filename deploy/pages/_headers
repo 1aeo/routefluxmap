@@ -8,6 +8,10 @@
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  X-XSS-Protection: 1; mode=block
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+  # Content Security Policy - allows MapLibre/CARTO tiles, Tor Project links, and inline styles for React
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.cartocdn.com https://*.digitaloceanspaces.com; connect-src 'self' https://*.cartocdn.com https://*.digitaloceanspaces.com https://*.r2.cloudflarestorage.com https://metrics.torproject.org; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'
 
 # Static assets - long cache
 /assets/*

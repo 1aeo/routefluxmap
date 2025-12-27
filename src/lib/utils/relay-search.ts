@@ -38,9 +38,22 @@ export type SearchResult =
 /**
  * Clean fingerprint by removing common formatting characters
  * Exported for reuse in other components
+ * 
+ * Security: Sanitizes input and enforces maximum length
+ * Note: Does NOT filter to hex-only, as that's done at validation time
  */
 export function cleanFingerprint(fingerprint: string): string {
-  return fingerprint.replace(/[$:\s-]/g, '').toUpperCase();
+  if (!fingerprint || typeof fingerprint !== 'string') {
+    return '';
+  }
+  // Limit length to prevent DoS (40 chars for fingerprint + some tolerance for formatting)
+  const limited = fingerprint.slice(0, 60);
+  // Remove common formatting characters and convert to uppercase
+  // Keeps alphanumeric characters for search flexibility (validation happens elsewhere)
+  return limited
+    .replace(/[$:\s-]/g, '')
+    .replace(/[\x00-\x1f\x7f]/g, '')  // Remove control characters
+    .toUpperCase();
 }
 
 /**

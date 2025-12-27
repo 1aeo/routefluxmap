@@ -5,6 +5,23 @@
 
 import { cleanFingerprint } from './relay-search';
 
+/** Maximum length for URL hash parameter values to prevent DoS */
+const MAX_PARAM_VALUE_LENGTH = 200;
+
+/** Allowed parameter keys (whitelist approach) */
+const ALLOWED_PARAMS = new Set(['date', 'ML', 'CC', 'relay', 'zoom', 'lat', 'lng', 'lon']);
+
+/**
+ * Sanitize a URL parameter value
+ * Removes potentially dangerous characters and enforces length limits
+ */
+function sanitizeParamValue(value: string): string {
+  // Truncate to max length
+  const truncated = value.slice(0, MAX_PARAM_VALUE_LENGTH);
+  // Remove control characters and null bytes
+  return truncated.replace(/[\x00-\x1f\x7f]/g, '');
+}
+
 /**
  * Parse URL hash parameters into a key-value record
  *
@@ -22,7 +39,14 @@ export function parseUrlHash(): Record<string, string> {
 
   hash.split('&').forEach((part) => {
     const [key, value] = part.split('=');
-    if (key && value) params[key] = decodeURIComponent(value);
+    // Only accept whitelisted parameters and sanitize values
+    if (key && value && ALLOWED_PARAMS.has(key)) {
+      try {
+        params[key] = sanitizeParamValue(decodeURIComponent(value));
+      } catch {
+        // Skip malformed URL-encoded values
+      }
+    }
   });
 
   return params;

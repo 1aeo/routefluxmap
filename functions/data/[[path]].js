@@ -34,6 +34,10 @@ function getMimeType(path) {
   return MIME_TYPES[getExtension(path)] || 'application/octet-stream';
 }
 
+/**
+ * Normalize and sanitize path from request params.
+ * Prevents path traversal attacks and restricts to allowed file types.
+ */
 function normalizePath(params) {
   let path = '';
   if (Array.isArray(params.path)) {
@@ -42,6 +46,30 @@ function normalizePath(params) {
     path = String(params.path);
   }
   if (!path || path === '') return 'index.json';
+  
+  // Security: Remove any path traversal attempts
+  // - Remove ../ sequences (path traversal)
+  // - Remove leading slashes (absolute path attempts)
+  // - Remove null bytes (null byte injection)
+  path = path
+    .replace(/\.\.\//g, '')          // Remove ../
+    .replace(/\.\.$/g, '')           // Remove trailing ..
+    .replace(/^\/+/, '')             // Remove leading slashes
+    .replace(/%2e%2e/gi, '')         // Remove URL-encoded ..
+    .replace(/%2f/gi, '/')           // Normalize URL-encoded slashes
+    .replace(/\0/g, '');             // Remove null bytes
+  
+  // Validate: Only allow alphanumeric, dash, underscore, dot, and forward slash
+  // This prevents any remaining injection attempts
+  if (!/^[\w\-./]+$/.test(path)) {
+    return 'index.json';
+  }
+  
+  // Ensure path doesn't start with a dot (hidden files)
+  if (path.startsWith('.') || path.includes('/.')) {
+    return 'index.json';
+  }
+  
   return path;
 }
 

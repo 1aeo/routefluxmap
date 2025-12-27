@@ -53,10 +53,11 @@ describe('URL Hash Utilities', () => {
     });
 
     it('decodes URI-encoded values', () => {
-      window.location.hash = '#name=Hello%20World&city=New%20York';
+      // Note: Only whitelisted params are parsed (security feature)
+      window.location.hash = '#date=2024-01-15&relay=ABC%20DEF';
       expect(parseUrlHash()).toEqual({
-        name: 'Hello World',
-        city: 'New York',
+        date: '2024-01-15',
+        relay: 'ABC DEF',
       });
     });
 
@@ -106,13 +107,14 @@ describe('URL Hash Utilities', () => {
     });
 
     it('encodes special characters', () => {
-      updateUrlHash('query', 'hello world');
+      // Note: Only whitelisted params are parsed (security feature)
+      updateUrlHash('relay', 'hello world');
 
       // The value should be encoded in the URL
       expect(window.location.hash).toContain('hello%20world');
 
       // But parsing should decode it
-      expect(parseUrlHash().query).toBe('hello world');
+      expect(parseUrlHash().relay).toBe('hello world');
     });
   });
 

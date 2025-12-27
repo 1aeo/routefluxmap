@@ -80,15 +80,26 @@ export function formatDateForUrl(dateStr: string): string {
 
 /**
  * Parse a date from URL hash
+ * Validates date components are within reasonable ranges
  */
 export function parseDateFromUrl(hash: string): { year: number; month: number; day: number } | null {
-  const match = hash.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!hash || typeof hash !== 'string') return null;
+  
+  // Limit input length to prevent ReDoS
+  const limited = hash.slice(0, 50);
+  const match = limited.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (!match) return null;
-  return {
-    year: parseInt(match[1], 10),
-    month: parseInt(match[2], 10),
-    day: parseInt(match[3], 10),
-  };
+  
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  
+  // Validate ranges
+  if (year < 2000 || year > 2100) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  
+  return { year, month, day };
 }
 
 /**
