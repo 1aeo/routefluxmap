@@ -5,6 +5,8 @@
  * Both URLs are configured via environment variables at build time.
  */
 
+import { isValidDateComponents } from './format';
+
 // Get data URLs from environment (set at build time)
 const PRIMARY_DATA_URL = import.meta.env.PUBLIC_DATA_URL || '';
 const FALLBACK_DATA_URL = import.meta.env.PUBLIC_DATA_URL_FALLBACK || '';
@@ -19,7 +21,7 @@ const DEFAULT_FETCH_TIMEOUT_MS = 60000;
 
 interface FetchOptions extends RequestInit {
   onProgress?: (progress: number) => void;
-  /** Timeout in milliseconds (default: 30000) */
+  /** Timeout in milliseconds (default: 60000) */
   timeout?: number;
 }
 
@@ -200,27 +202,22 @@ export async function fetchDataJson<T>(filename: string): Promise<T> {
   return data;
 }
 
+/** Strict date format regex: YYYY-MM-DD */
+const DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+
 /**
  * Validate date string format (YYYY-MM-DD)
  * Returns sanitized date or null if invalid
  */
 function validateDateString(date: string): string | null {
-  // Strict date format: YYYY-MM-DD
-  const dateRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
-  const match = date.match(dateRegex);
+  const match = date.match(DATE_REGEX);
   if (!match) return null;
   
   const [, year, month, day] = match;
-  const y = parseInt(year, 10);
-  const m = parseInt(month, 10);
-  const d = parseInt(day, 10);
+  if (!isValidDateComponents(parseInt(year, 10), parseInt(month, 10), parseInt(day, 10))) {
+    return null;
+  }
   
-  // Validate ranges
-  if (y < 2000 || y > 2100) return null;  // Reasonable year range
-  if (m < 1 || m > 12) return null;
-  if (d < 1 || d > 31) return null;
-  
-  // Return the canonical format
   return `${year}-${month}-${day}`;
 }
 

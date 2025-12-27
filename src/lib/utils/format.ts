@@ -3,6 +3,20 @@
  * Migrated from util/format.js
  */
 
+// Shared date validation constants
+const MIN_YEAR = 2000;
+const MAX_YEAR = 2100;
+
+/**
+ * Validate date components are within reasonable ranges
+ * Shared validation logic used by multiple date functions
+ */
+export function isValidDateComponents(year: number, month: number, day: number): boolean {
+  return year >= MIN_YEAR && year <= MAX_YEAR && 
+         month >= 1 && month <= 12 && 
+         day >= 1 && day <= 31;
+}
+
 /**
  * Format a number with locale-aware thousands separators
  */
@@ -94,10 +108,7 @@ export function parseDateFromUrl(hash: string): { year: number; month: number; d
   const month = parseInt(match[2], 10);
   const day = parseInt(match[3], 10);
   
-  // Validate ranges
-  if (year < 2000 || year > 2100) return null;
-  if (month < 1 || month > 12) return null;
-  if (day < 1 || day > 31) return null;
+  if (!isValidDateComponents(year, month, day)) return null;
   
   return { year, month, day };
 }

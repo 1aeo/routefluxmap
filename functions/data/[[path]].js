@@ -78,21 +78,7 @@ function getCacheKey(request) {
   return new Request(`${url.origin}${url.pathname}`, { method: 'GET' });
 }
 
-/**
- * Get allowed origins for CORS
- * In production, restrict to your domain(s)
- */
-function getAllowedOrigins(env) {
-  // Allow custom origins from environment, fallback to permissive for public data
-  const customOrigins = env.ALLOWED_ORIGINS;
-  if (customOrigins) {
-    return customOrigins.split(',').map(o => o.trim());
-  }
-  // Default: allow all (data is public)
-  return ['*'];
-}
-
-function buildResponse(body, path, source, cacheTTL = 300, origin = '*') {
+function buildResponse(body, path, source, cacheTTL = 300) {
   return new Response(body, {
     status: 200,
     headers: {
