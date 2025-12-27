@@ -78,7 +78,21 @@ function getCacheKey(request) {
   return new Request(`${url.origin}${url.pathname}`, { method: 'GET' });
 }
 
-function buildResponse(body, path, source, cacheTTL = 300) {
+/**
+ * Get allowed origins for CORS
+ * In production, restrict to your domain(s)
+ */
+function getAllowedOrigins(env) {
+  // Allow custom origins from environment, fallback to permissive for public data
+  const customOrigins = env.ALLOWED_ORIGINS;
+  if (customOrigins) {
+    return customOrigins.split(',').map(o => o.trim());
+  }
+  // Default: allow all (data is public)
+  return ['*'];
+}
+
+function buildResponse(body, path, source, cacheTTL = 300, origin = '*') {
   return new Response(body, {
     status: 200,
     headers: {
@@ -86,7 +100,8 @@ function buildResponse(body, path, source, cacheTTL = 300) {
       'Cache-Control': `public, max-age=${cacheTTL}`,
       'CDN-Cache-Control': `public, max-age=${cacheTTL}`,
       'X-Served-From': source,
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': origin,
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }
@@ -178,14 +193,17 @@ export async function onRequest(context) {
     }
   }
 
-  // Nothing found
-  return new Response(`Not Found: ${path}`, {
+  // Nothing found - sanitize path in response to prevent header injection
+  const safePath = path.replace(/[\r\n]/g, '').slice(0, 100);
+  return new Response(`Not Found: ${safePath}`, {
     status: 404,
     headers: {
       'Content-Type': 'text/plain',
       'X-Cache-Status': 'MISS',
-      'X-Error': lastError?.message || 'not-found',
+      // Don't expose internal error details to client
+      'X-Error': 'not-found',
       'Access-Control-Allow-Origin': '*',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }

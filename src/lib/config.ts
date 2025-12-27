@@ -91,7 +91,15 @@ export const config = {
   },
 
   // Map settings - dark theme
+  // Note: Map style URL is from a trusted CDN (CARTO), validated in CSP headers
   mapStyle: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  
+  // Trusted external domains for Content Security Policy
+  trustedDomains: [
+    'basemaps.cartocdn.com',
+    '*.cartocdn.com',
+    'metrics.torproject.org',
+  ] as const,
   
   // Attribution sources (name, url, prefix?, suffix?)
   attributions: [

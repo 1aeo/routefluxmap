@@ -706,7 +706,24 @@ function downloadFile(url: string, dest: string): Promise<void> {
   });
 }
 
+/**
+ * Validate file path to prevent command injection
+ * Only allows alphanumeric, dash, underscore, dot, and forward slash
+ */
+function isValidFilePath(path: string): boolean {
+  // Must be a reasonable path without shell metacharacters
+  return /^[\w\-./]+$/.test(path) && 
+         !path.includes('..') && 
+         path.length < 500;
+}
+
 async function verifyArchive(archivePath: string): Promise<boolean> {
+  // Security: Validate path before shell execution
+  if (!isValidFilePath(archivePath)) {
+    console.error(`Invalid archive path: ${archivePath.slice(0, 100)}`);
+    return false;
+  }
+  
   try {
     await execAsync(`xz -t "${archivePath}"`, { timeout: 120000 });
     return true;

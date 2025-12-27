@@ -29,4 +29,9 @@
 /data/*
   Access-Control-Allow-Origin: *
   Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+
+# API-like endpoints - add rate limit hints
+/data/index.json
+  Cache-Control: public, max-age=300, stale-while-revalidate=60
 
