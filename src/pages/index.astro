@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import TorMap from '../components/map/TorMap';
+import ErrorBoundary, { MapErrorFallback } from '../components/ui/ErrorBoundary';
 import { config } from '../lib/config';
 
 const metricsUrl = config.metricsUrl;
@@ -10,7 +11,10 @@ const metricsUrl = config.metricsUrl;
   <main class="relative h-screen w-screen bg-tor-darker">
     <!-- Map Component (React Island) - handles its own UI including header/controls -->
     <!-- Data URLs configured via PUBLIC_DATA_URL and PUBLIC_DATA_URL_FALLBACK env vars -->
-    <TorMap client:load />
+    <!-- Wrapped in ErrorBoundary to prevent crashes from breaking the entire page -->
+    <ErrorBoundary client:load fallback={<MapErrorFallback />}>
+      <TorMap client:load />
+    </ErrorBoundary>
 
     <!-- Info Button -->
     <button 

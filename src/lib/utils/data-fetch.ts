@@ -14,57 +14,97 @@ interface FetchResult<T> {
   source: 'local' | 'primary' | 'fallback';
 }
 
+/** Default timeout for fetch requests (30 seconds) */
+const DEFAULT_FETCH_TIMEOUT_MS = 30000;
+
 interface FetchOptions extends RequestInit {
   onProgress?: (progress: number) => void;
+  /** Timeout in milliseconds (default: 30000) */
+  timeout?: number;
 }
 
 /**
- * Helper to fetch with progress tracking
+ * Create an AbortController with timeout
+ */
+function createTimeoutController(timeoutMs: number): { controller: AbortController; clear: () => void } {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`Request timeout after ${timeoutMs}ms`));
+  }, timeoutMs);
+  
+  return {
+    controller,
+    clear: () => clearTimeout(timeoutId),
+  };
+}
+
+/**
+ * Helper to fetch with progress tracking and timeout
  */
 async function fetchWithProgress<T>(url: string, options?: FetchOptions): Promise<T> {
-  const response = await fetch(url, options);
+  const timeout = options?.timeout ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const { controller, clear } = createTimeoutController(timeout);
   
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  // If no progress callback or no content-length, fallback to standard json()
-  const contentLength = response.headers.get('Content-Length');
-  if (!options?.onProgress || !contentLength) {
-    return response.json();
-  }
-
-  const total = parseInt(contentLength, 10);
-  let loaded = 0;
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return response.json();
-  }
-
-  const chunks: Uint8Array[] = [];
-  
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
     
-    if (value) {
-      chunks.push(value);
-      loaded += value.length;
-      options.onProgress(Math.min(1.0, loaded / total));
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
     }
-  }
 
-  // Reassemble JSON
-  const allChunks = new Uint8Array(loaded);
-  let position = 0;
-  for (const chunk of chunks) {
-    allChunks.set(chunk, position);
-    position += chunk.length;
+    // If no progress callback or no content-length, fallback to standard json()
+    const contentLength = response.headers.get('Content-Length');
+    if (!options?.onProgress || !contentLength) {
+      const data = await response.json();
+      clear();
+      return data;
+    }
+
+    const total = parseInt(contentLength, 10);
+    let loaded = 0;
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const data = await response.json();
+      clear();
+      return data;
+    }
+
+    const chunks: Uint8Array[] = [];
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      if (value) {
+        chunks.push(value);
+        loaded += value.length;
+        options.onProgress(Math.min(1.0, loaded / total));
+      }
+    }
+
+    // Reassemble JSON
+    const allChunks = new Uint8Array(loaded);
+    let position = 0;
+    for (const chunk of chunks) {
+      allChunks.set(chunk, position);
+      position += chunk.length;
+    }
+    
+    const text = new TextDecoder('utf-8').decode(allChunks);
+    clear();
+    return JSON.parse(text);
+  } catch (error: any) {
+    clear();
+    // Provide clearer error message for timeout
+    if (error.name === 'AbortError' || error.message?.includes('timeout')) {
+      throw new Error(`Request timeout after ${timeout}ms`);
+    }
+    throw error;
   }
-  
-  const text = new TextDecoder('utf-8').decode(allChunks);
-  return JSON.parse(text);
 }
 
 /**

@@ -39,7 +39,11 @@ describe('data-fetch utilities', () => {
       
       expect(result.source).toBe('local');
       expect(result.data).toEqual(mockData);
-      expect(global.fetch).toHaveBeenCalledWith('/data/test.json', undefined);
+      // Note: fetch now always includes a signal for timeout support
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/data/test.json',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
     });
 
     it('prepends /data/ to paths without leading slash', async () => {
@@ -52,7 +56,11 @@ describe('data-fetch utilities', () => {
 
       await fetchWithFallback('some/path.json');
       
-      expect(global.fetch).toHaveBeenCalledWith('/data/some/path.json', undefined);
+      // Note: fetch now always includes a signal for timeout support
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/data/some/path.json',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
     });
 
     it('preserves paths with leading slash', async () => {
@@ -65,7 +73,11 @@ describe('data-fetch utilities', () => {
 
       await fetchWithFallback('/custom/path.json');
       
-      expect(global.fetch).toHaveBeenCalledWith('/custom/path.json', undefined);
+      // Note: fetch now always includes a signal for timeout support
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/custom/path.json',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
     });
 
     it('throws error when local source fails (no fallback URLs configured)', async () => {
@@ -94,6 +106,22 @@ describe('data-fetch utilities', () => {
       await expect(fetchWithFallback('notfound.json')).rejects.toThrow(
         /Failed to fetch notfound\.json/
       );
+    });
+
+    it('includes AbortSignal for timeout support', async () => {
+      const mockData = { test: 'data' };
+      (global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(mockData),
+        headers: new Headers(),
+      });
+
+      await fetchWithFallback('test.json');
+      
+      // Verify that fetch was called with an AbortSignal
+      const fetchCall = (global.fetch as any).mock.calls[0];
+      expect(fetchCall[1]).toHaveProperty('signal');
+      expect(fetchCall[1].signal).toBeInstanceOf(AbortSignal);
     });
 
     it('reports progress when Content-Length is available', async () => {
