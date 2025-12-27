@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { RelayData, DateIndex } from '../types';
-import { fetchWithFallback } from '../utils/data-fetch';
+import { fetchWithFallback, sanitizeErrorMessage } from '../utils/data-fetch';
 import { parseUrlHash, updateUrlHash } from '../utils/url';
 
 export interface UseRelaysResult {
@@ -214,8 +214,8 @@ export function useRelays(options: UseRelaysOptions = {}): UseRelaysResult {
       }
 
       return latestNewDate;
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(sanitizeErrorMessage(err));
       setLoading(false);
       setInitialLoading(false);
       return null;
@@ -299,10 +299,10 @@ export function useRelays(options: UseRelaysOptions = {}): UseRelaysResult {
         setLoadingProgress(prev => Math.max(prev, 70));
         setError(null);
       })
-      .catch((err: any) => {
+      .catch((err) => {
         // Don't show errors for dates we've moved past
         if (stale) return;
-        setError(err.message);
+        setError(sanitizeErrorMessage(err));
       })
       .finally(() => {
         // Don't update loading state for stale requests

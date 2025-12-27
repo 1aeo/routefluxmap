@@ -13,7 +13,7 @@ export { useCountryGeo } from './useCountryGeo';
 export type { UseCountryGeoResult } from './useCountryGeo';
 
 // Map state hooks
-export { useMapView, COUNTRY_ZOOM, FOCUS_ZOOM_MIN, FOCUS_ZOOM_MAX, FLY_TO_DURATION_MS } from './useMapView';
+export { useMapView, COUNTRY_ZOOM, FLY_TO_DURATION_MS } from './useMapView';
 export type { UseMapViewResult } from './useMapView';
 
 export { useLayerVisibility } from './useLayerVisibility';
@@ -43,6 +43,4 @@ export type { UseWebGLResult, WebGLError } from './useWebGL';
 export { useIsMobile, MOBILE_BREAKPOINT } from './useIsMobile';
 export type { UseIsMobileResult } from './useIsMobile';
 
-export { useRelayFade, RELAY_TRANSITION_MS } from './useRelayFade';
-export type { UseRelayFadeResult } from './useRelayFade';
 

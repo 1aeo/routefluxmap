@@ -28,6 +28,7 @@ import {
   useWebGL,
   useIsMobile,
   FLY_TO_DURATION_MS,
+  COUNTRY_ZOOM,
 } from '../../lib/hooks';
 
 // Layer factories
@@ -53,7 +54,6 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 // Mobile layout constants
 const MOBILE_SLIDER_BOTTOM = 85;
-const COUNTRY_ZOOM = 5;
 
 export default function TorMap() {
   // === HOOKS ===
@@ -574,7 +574,7 @@ export default function TorMap() {
             <span key={name}>
               {i > 0 && ', '}
               {prefix && `${prefix} `}
-              <a href={url} target="_blank" rel="noopener" className="text-tor-green hover:underline">
+              <a href={url} target="_blank" rel="noopener noreferrer" className="text-tor-green hover:underline">
                 {name}
               </a>
               {suffix && ` ${suffix}`}

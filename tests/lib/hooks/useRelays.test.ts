@@ -117,8 +117,8 @@ describe('useRelays', () => {
         expect(result.current.error).not.toBeNull();
       });
 
-      // Error message is wrapped by fetchWithFallback: "Failed to fetch index.json: ..."
-      expect(result.current.error).toMatch(/Failed to fetch|Network error/);
+      // Error messages are sanitized to prevent info leakage
+      expect(result.current.error).toMatch(/Unable to load data|Network error|Request failed/);
       expect(result.current.loading).toBe(false);
       expect(result.current.initialLoading).toBe(false);
     });
@@ -135,8 +135,8 @@ describe('useRelays', () => {
         expect(result.current.error).not.toBeNull();
       });
 
-      // Error message is wrapped by fetchWithFallback
-      expect(result.current.error).toMatch(/Failed to fetch|Relay fetch failed/);
+      // Error messages are sanitized to prevent info leakage
+      expect(result.current.error).toMatch(/Unable to load data|Request failed/);
     });
   });
 

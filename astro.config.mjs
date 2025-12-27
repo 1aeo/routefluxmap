@@ -6,6 +6,7 @@ import tailwind from '@astrojs/tailwind';
 export default defineConfig({
   server: {
     host: '192.168.5.36',
+    port: 4325,
   },
   integrations: [
     react(),

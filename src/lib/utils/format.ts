@@ -18,58 +18,6 @@ export function isValidDateComponents(year: number, month: number, day: number):
 }
 
 /**
- * Format a number with locale-aware thousands separators
- */
-export function formatNumber(value: number): string {
-  return value.toLocaleString();
-}
-
-/**
- * Format a large number with K/M/B suffix
- */
-export function formatCompact(value: number): string {
-  if (value >= 1_000_000_000) {
-    return (value / 1_000_000_000).toFixed(1) + 'B';
-  }
-  if (value >= 1_000_000) {
-    return (value / 1_000_000).toFixed(1) + 'M';
-  }
-  if (value >= 1_000) {
-    return (value / 1_000).toFixed(1) + 'K';
-  }
-  return value.toString();
-}
-
-/**
- * Format bandwidth in appropriate units
- */
-export function formatBandwidth(bytes: number): string {
-  if (bytes >= 1_000_000_000) {
-    return (bytes / 1_000_000_000).toFixed(2) + ' GBits';
-  }
-  if (bytes >= 1_000_000) {
-    return (bytes / 1_000_000).toFixed(2) + ' MBits';
-  }
-  if (bytes >= 1_000) {
-    return (bytes / 1_000).toFixed(2) + ' KBits';
-  }
-  return bytes.toString() + ' Bits';
-}
-
-/**
- * Format a date string to friendly format
- */
-export function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-}
-
-/**
  * Format a date string to short format
  */
 export function formatDateShort(dateStr: string): string {
@@ -82,13 +30,13 @@ export function formatDateShort(dateStr: string): string {
 }
 
 /**
- * Format a date for URL hash
+ * Format a date for URL hash (YYYY-MM-DD format)
  */
 export function formatDateForUrl(dateStr: string): string {
   const date = new Date(dateStr);
   const year = date.getUTCFullYear();
-  const month = date.getUTCMonth() + 1;
-  const day = date.getUTCDate();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 

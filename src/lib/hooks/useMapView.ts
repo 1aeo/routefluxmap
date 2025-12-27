@@ -159,5 +159,5 @@ export function useMapView(): UseMapViewResult {
 }
 
 // Export constants for external use
-export { COUNTRY_ZOOM, FOCUS_ZOOM_MIN, FOCUS_ZOOM_MAX, FLY_TO_DURATION_MS };
+export { COUNTRY_ZOOM, FLY_TO_DURATION_MS };
 

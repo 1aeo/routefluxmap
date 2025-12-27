@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import TorMap from '../components/map/TorMap';
-import ErrorBoundary, { MapErrorFallback } from '../components/ui/ErrorBoundary';
+import ErrorBoundary from '../components/ui/ErrorBoundary';
 import { config } from '../lib/config';
 
 const metricsUrl = config.metricsUrl;
@@ -12,7 +12,7 @@ const metricsUrl = config.metricsUrl;
     <!-- Map Component (React Island) - handles its own UI including header/controls -->
     <!-- Data URLs configured via PUBLIC_DATA_URL and PUBLIC_DATA_URL_FALLBACK env vars -->
     <!-- Wrapped in ErrorBoundary to prevent crashes from breaking the entire page -->
-    <ErrorBoundary client:load fallback={<MapErrorFallback />}>
+    <ErrorBoundary client:load>
       <TorMap client:load />
     </ErrorBoundary>
 
@@ -30,8 +30,8 @@ const metricsUrl = config.metricsUrl;
     <!-- Footer -->
     <footer class="absolute bottom-4 left-4 z-20 pointer-events-none">
       <div class="text-gray-500 text-xs">
-        Data from <a href="https://www.torproject.org" target="_blank" rel="noopener" class="text-tor-green hover:underline pointer-events-auto">Tor Project</a>
-        • <a href={metricsUrl} target="_blank" rel="noopener" class="text-tor-green hover:underline pointer-events-auto">Metrics</a>
+        Data from <a href="https://www.torproject.org" target="_blank" rel="noopener noreferrer" class="text-tor-green hover:underline pointer-events-auto">Tor Project</a>
+        • <a href={metricsUrl} target="_blank" rel="noopener noreferrer" class="text-tor-green hover:underline pointer-events-auto">Metrics</a>
       </div>
     </footer>
   </main>

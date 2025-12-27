@@ -113,8 +113,10 @@ bucket_name = \"${R2_BUCKET}\""
     fi
     
     # Generate wrangler.toml
+    ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-}"
     sed -e "s|{{CF_PAGES_PROJECT}}|${CF_PAGES_PROJECT}|g" \
         -e "s|{{STORAGE_ORDER}}|${STORAGE_ORDER}|g" \
+        -e "s|{{ALLOWED_ORIGINS}}|${ALLOWED_ORIGINS}|g" \
         "$TEMPLATE_FILE" > "$WRANGLER_FILE.tmp"
     
     # Replace multi-line sections

@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // In test environment, PUBLIC_DATA_URL and PUBLIC_DATA_URL_FALLBACK may be empty
 import {
   fetchWithFallback,
-  getDataUrlConfig,
   createUpdateChecker,
+  sanitizeErrorMessage,
 } from '../../src/lib/utils/data-fetch';
 
 describe('data-fetch utilities', () => {
@@ -86,25 +86,28 @@ describe('data-fetch utilities', () => {
       (global.fetch as any).mockRejectedValueOnce(new Error('Local not found'));
 
       await expect(fetchWithFallback('test.json')).rejects.toThrow(
-        /Failed to fetch test\.json/
+        /Unable to load data/
       );
     });
 
-    it('throws error with details when fetch fails', async () => {
+    it('throws error with sanitized message when fetch fails', async () => {
       (global.fetch as any).mockRejectedValueOnce(new Error('Network error'));
 
-      await expect(fetchWithFallback('test.json')).rejects.toThrow('Failed to fetch');
+      // Error messages are sanitized to prevent info leakage
+      await expect(fetchWithFallback('test.json')).rejects.toThrow(/Unable to load data/);
     });
 
     it('handles HTTP error responses by throwing', async () => {
       // Local returns 404 - this triggers the error path in fetchWithProgress
+      // Since local failures are silently caught (expected in production),
+      // and no fallback URLs are configured in tests, we get a generic error
       (global.fetch as any).mockResolvedValueOnce({
         ok: false,
         status: 404,
       });
 
       await expect(fetchWithFallback('notfound.json')).rejects.toThrow(
-        /Failed to fetch notfound\.json/
+        /Unable to load data/
       );
     });
 
@@ -191,24 +194,6 @@ describe('data-fetch utilities', () => {
       const result = await fetchWithFallback<typeof mockData>('test.json');
 
       expect(result.data).toEqual(mockData);
-    });
-  });
-
-  describe('getDataUrlConfig', () => {
-    it('returns configured URLs', () => {
-      const config = getDataUrlConfig();
-      
-      expect(config).toHaveProperty('primary');
-      expect(config).toHaveProperty('fallback');
-      expect(typeof config.primary).toBe('string');
-      expect(typeof config.fallback).toBe('string');
-    });
-
-    it('returns "(not set)" placeholder when env vars are empty', () => {
-      // Note: In actual test, env vars are stubbed, so this tests the format
-      const config = getDataUrlConfig();
-      expect(config.primary).not.toBe('');
-      expect(config.fallback).not.toBe('');
     });
   });
 
@@ -403,6 +388,42 @@ describe('data-fetch utilities', () => {
       );
       
       checker.stop();
+    });
+  });
+
+  describe('sanitizeErrorMessage', () => {
+    it('sanitizes timeout errors', () => {
+      expect(sanitizeErrorMessage(new Error('Request timeout after 30000ms'))).toBe('Request timed out');
+      expect(sanitizeErrorMessage(new Error('timeout exceeded'))).toBe('Request timed out');
+    });
+
+    it('sanitizes HTTP 4xx errors', () => {
+      expect(sanitizeErrorMessage(new Error('HTTP 404'))).toBe('Data not found');
+      expect(sanitizeErrorMessage(new Error('HTTP 403 Forbidden'))).toBe('Data not found');
+    });
+
+    it('sanitizes HTTP 5xx errors', () => {
+      expect(sanitizeErrorMessage(new Error('HTTP 500'))).toBe('Server error');
+      expect(sanitizeErrorMessage(new Error('HTTP 503 Service Unavailable'))).toBe('Server error');
+    });
+
+    it('sanitizes network errors', () => {
+      expect(sanitizeErrorMessage(new Error('Failed to fetch'))).toBe('Network error');
+      expect(sanitizeErrorMessage(new Error('NetworkError when attempting to fetch'))).toBe('Network error');
+    });
+
+    it('returns generic message for unknown errors', () => {
+      expect(sanitizeErrorMessage(new Error('Something weird happened'))).toBe('Request failed');
+      expect(sanitizeErrorMessage('string error')).toBe('Request failed');
+      expect(sanitizeErrorMessage(null)).toBe('Request failed');
+      expect(sanitizeErrorMessage(undefined)).toBe('Request failed');
+    });
+
+    it('does not leak internal paths or stack traces', () => {
+      const error = new Error('ENOENT: no such file /home/user/secret/config.json');
+      expect(sanitizeErrorMessage(error)).toBe('Request failed');
+      expect(sanitizeErrorMessage(error)).not.toContain('/home');
+      expect(sanitizeErrorMessage(error)).not.toContain('config.json');
     });
   });
 });

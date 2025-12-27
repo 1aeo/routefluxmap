@@ -54,34 +54,8 @@ export default class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback;
       }
 
-      // Default error UI
-      return (
-        <div className="flex flex-col items-center justify-center h-full bg-tor-darker p-8">
-          <div className="bg-black/50 backdrop-blur-md border border-red-500/30 rounded-lg p-6 max-w-md text-center">
-            <div className="text-red-500 text-4xl mb-4">⚠️</div>
-            <h2 className="text-white text-xl font-bold mb-2">Something went wrong</h2>
-            <p className="text-gray-400 text-sm mb-4">
-              An error occurred while rendering this component.
-            </p>
-            {import.meta.env.DEV && this.state.error && (
-              <details className="text-left mb-4">
-                <summary className="text-gray-500 text-xs cursor-pointer hover:text-gray-400">
-                  Error details (dev only)
-                </summary>
-                <pre className="mt-2 p-2 bg-black/50 rounded text-xs text-red-400 overflow-auto max-h-32">
-                  {this.state.error.message}
-                </pre>
-              </details>
-            )}
-            <button
-              onClick={this.handleReset}
-              className="px-4 py-2 bg-tor-green/20 hover:bg-tor-green/30 text-tor-green rounded-lg transition-colors text-sm"
-            >
-              Try Again
-            </button>
-          </div>
-        </div>
-      );
+      // Default error UI - use MapErrorFallback for map context
+      return <MapErrorFallback />;
     }
 
     return this.props.children;

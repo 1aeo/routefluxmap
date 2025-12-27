@@ -78,7 +78,35 @@ function getCacheKey(request) {
   return new Request(`${url.origin}${url.pathname}`, { method: 'GET' });
 }
 
-function buildResponse(body, path, source, cacheTTL = 300) {
+/**
+ * Get allowed origin for CORS
+ * Checks if request origin is in the allowed list
+ * 
+ * @param {Request} request - Incoming request
+ * @param {Object} env - Environment variables
+ * @returns {string} Origin to use in Access-Control-Allow-Origin header
+ */
+function getAllowedOrigin(request, env) {
+  const requestOrigin = request.headers.get('Origin');
+  
+  // If ALLOWED_ORIGINS is configured, validate against it
+  // Format: comma-separated list of origins, e.g., "https://example.com,https://app.example.com"
+  const allowedOrigins = env.ALLOWED_ORIGINS;
+  if (allowedOrigins) {
+    const origins = allowedOrigins.split(',').map(o => o.trim());
+    if (requestOrigin && origins.includes(requestOrigin)) {
+      return requestOrigin;
+    }
+    // If origin not in list, return first allowed origin (for non-CORS requests)
+    return origins[0] || '*';
+  }
+  
+  // Default: allow all origins (data is public)
+  // Configure ALLOWED_ORIGINS in wrangler.toml for production
+  return '*';
+}
+
+function buildResponse(body, path, source, request, env, cacheTTL = 300) {
   return new Response(body, {
     status: 200,
     headers: {
@@ -86,7 +114,7 @@ function buildResponse(body, path, source, cacheTTL = 300) {
       'Cache-Control': `public, max-age=${cacheTTL}`,
       'CDN-Cache-Control': `public, max-age=${cacheTTL}`,
       'X-Served-From': source,
-      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Origin': getAllowedOrigin(request, env),
       'X-Content-Type-Options': 'nosniff',
     },
   });
@@ -94,16 +122,16 @@ function buildResponse(body, path, source, cacheTTL = 300) {
 
 // === Storage Fetchers ===
 
-async function fetchFromR2(env, path) {
+async function fetchFromR2(request, env, path) {
   if (!env.DATA_BUCKET) return null;
 
   const object = await env.DATA_BUCKET.get(path);
   if (!object) return null;
 
-  return buildResponse(object.body, path, 'cloudflare-r2');
+  return buildResponse(object.body, path, 'cloudflare-r2', request, env);
 }
 
-async function fetchFromSpaces(env, path) {
+async function fetchFromSpaces(request, env, path) {
   const baseUrl = env.DO_SPACES_URL;
   if (!baseUrl) return null;
 
@@ -114,7 +142,7 @@ async function fetchFromSpaces(env, path) {
 
   if (!response.ok) return null;
 
-  return buildResponse(response.body, path, 'digitalocean-spaces');
+  return buildResponse(response.body, path, 'digitalocean-spaces', request, env);
 }
 
 // === Source Chain ===
@@ -164,7 +192,7 @@ export async function onRequest(context) {
 
   for (const source of sources) {
     try {
-      const response = await source.fetch(env, path);
+      const response = await source.fetch(request, env, path);
       if (response) {
         // Clone for cache, return original
         const responseToCache = response.clone();
@@ -188,7 +216,7 @@ export async function onRequest(context) {
       'X-Cache-Status': 'MISS',
       // Don't expose internal error details to client
       'X-Error': 'not-found',
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': getAllowedOrigin(request, env),
       'X-Content-Type-Options': 'nosniff',
     },
   });

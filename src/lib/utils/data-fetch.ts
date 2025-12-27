@@ -19,10 +19,31 @@ interface FetchResult<T> {
 /** Default timeout for fetch requests (60 seconds) */
 const DEFAULT_FETCH_TIMEOUT_MS = 60000;
 
+/** Maximum response size in bytes (50MB - protects against DoS) */
+const MAX_RESPONSE_SIZE = 50 * 1024 * 1024;
+
 interface FetchOptions extends RequestInit {
   onProgress?: (progress: number) => void;
   /** Timeout in milliseconds (default: 60000) */
   timeout?: number;
+}
+
+/**
+ * Sanitize error message for user display
+ * Prevents leaking internal details while remaining helpful
+ */
+export function sanitizeErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const msg = error.message;
+    // Allow safe, generic error messages
+    if (msg.includes('timeout')) return 'Request timed out';
+    if (msg.includes('HTTP 4')) return 'Data not found';
+    if (msg.includes('HTTP 5')) return 'Server error';
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      return 'Network error';
+    }
+  }
+  return 'Request failed';
 }
 
 /**
@@ -57,8 +78,16 @@ async function fetchWithProgress<T>(url: string, options?: FetchOptions): Promis
       throw new Error(`HTTP ${response.status}`);
     }
 
-    // If no progress callback or no content-length, fallback to standard json()
+    // Check content-length to prevent DoS via huge responses
     const contentLength = response.headers.get('Content-Length');
+    if (contentLength) {
+      const size = parseInt(contentLength, 10);
+      if (size > MAX_RESPONSE_SIZE) {
+        throw new Error('Response too large');
+      }
+    }
+
+    // If no progress callback or no content-length, fallback to standard json()
     if (!options?.onProgress || !contentLength) {
       const data = await response.json();
       clear();
@@ -173,8 +202,8 @@ export async function fetchWithFallback<T>(
       const url = `${PRIMARY_DATA_URL}/${safePath}`;
       const data = await fetchWithProgress<T>(url, options);
       return { data, source: 'primary' };
-    } catch (err: any) {
-      errors.push(`Primary (${err.message})`);
+    } catch (err) {
+      errors.push(`Primary: ${sanitizeErrorMessage(err)}`);
     }
   }
 
@@ -185,89 +214,17 @@ export async function fetchWithFallback<T>(
       const data = await fetchWithProgress<T>(url, options);
       console.info(`[DataFetch] Using fallback for ${safePath}`);
       return { data, source: 'fallback' };
-    } catch (err: any) {
-      errors.push(`Fallback (${err.message})`);
+    } catch (err) {
+      errors.push(`Fallback: ${sanitizeErrorMessage(err)}`);
     }
   }
 
-  // All sources failed
-  throw new Error(`Failed to fetch ${safePath}: ${errors.join(', ')}`);
+  // All sources failed - provide generic message to users
+  throw new Error(`Unable to load data: ${errors.join('; ')}`);
 }
 
-/**
- * Fetch JSON from data URL with fallback support
- */
-export async function fetchDataJson<T>(filename: string): Promise<T> {
-  const { data } = await fetchWithFallback<T>(filename);
-  return data;
-}
-
-/** Strict date format regex: YYYY-MM-DD */
-const DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-/**
- * Validate date string format (YYYY-MM-DD)
- * Returns sanitized date or null if invalid
- */
-function validateDateString(date: string): string | null {
-  const match = date.match(DATE_REGEX);
-  if (!match) return null;
-  
-  const [, year, month, day] = match;
-  if (!isValidDateComponents(parseInt(year, 10), parseInt(month, 10), parseInt(day, 10))) {
-    return null;
-  }
-  
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * Fetch relay data for a specific date
- */
-export async function fetchRelayData(date: string) {
-  // Validate and sanitize date input
-  const sanitizedDate = validateDateString(date);
-  if (!sanitizedDate) {
-    throw new Error(`Invalid date format: ${date}`);
-  }
-  
-  // Try flat structure first, then current/ subdirectory
-  try {
-    return await fetchWithFallback(`relays-${sanitizedDate}.json`);
-  } catch {
-    return await fetchWithFallback(`current/relays-${sanitizedDate}.json`);
-  }
-}
-
-/**
- * Fetch country data for a specific date
- */
-export async function fetchCountryData(date: string) {
-  // Validate and sanitize date input
-  const sanitizedDate = validateDateString(date);
-  if (!sanitizedDate) {
-    throw new Error(`Invalid date format: ${date}`);
-  }
-  
-  return await fetchWithFallback(`countries-${sanitizedDate}.json`);
-}
-
-/**
- * Fetch the date index
- */
-export async function fetchDateIndex() {
-  return await fetchWithFallback('index.json');
-}
-
-/**
- * Get configured data URLs for debugging
- */
-export function getDataUrlConfig() {
-  return {
-    primary: PRIMARY_DATA_URL || '(not set)',
-    fallback: FALLBACK_DATA_URL || '(not set)',
-  };
-}
+// Note: Date validation for fetch paths uses isValidDateComponents from format.ts
+// The app fetches data via fetchWithFallback with pre-sanitized paths from useRelays
 
 // ============================================================================
 // Update Polling with ETag

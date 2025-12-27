@@ -18,6 +18,9 @@ pages_build_output_dir = "dist"
 # First = primary, second = fallback
 STORAGE_ORDER = "{{STORAGE_ORDER}}"
 
+# CORS: Allowed origins for data API
+ALLOWED_ORIGINS = "{{ALLOWED_ORIGINS}}"
+
 # DO Spaces URL (for HTTP fetch fallback)
 {{DO_SPACES_URL_VAR}}
 

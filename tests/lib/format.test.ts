@@ -1,78 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { 
-  formatNumber, 
-  formatCompact, 
-  formatBandwidth, 
-  formatDate, 
   formatDateShort,
   formatDateForUrl,
   formatMonth,
   formatMonthYear,
   formatYear,
-  parseDateFromUrl 
+  parseDateFromUrl,
+  isValidDateComponents,
 } from '../../src/lib/utils/format';
-
-describe('formatNumber', () => {
-  it('formats small numbers without change', () => {
-    expect(formatNumber(42)).toBe('42');
-  });
-
-  it('adds thousands separators to large numbers', () => {
-    // Note: This depends on locale, so we just check it contains the digits
-    const result = formatNumber(1234567);
-    expect(result).toContain('1');
-    expect(result).toContain('234');
-    expect(result).toContain('567');
-  });
-});
-
-describe('formatCompact', () => {
-  it('formats numbers under 1000 as-is', () => {
-    expect(formatCompact(999)).toBe('999');
-  });
-
-  it('formats thousands with K suffix', () => {
-    expect(formatCompact(1500)).toBe('1.5K');
-    expect(formatCompact(12000)).toBe('12.0K');
-  });
-
-  it('formats millions with M suffix', () => {
-    expect(formatCompact(1500000)).toBe('1.5M');
-    expect(formatCompact(12000000)).toBe('12.0M');
-  });
-
-  it('formats billions with B suffix', () => {
-    expect(formatCompact(1500000000)).toBe('1.5B');
-  });
-});
-
-describe('formatBandwidth', () => {
-  it('formats small values in Bits', () => {
-    expect(formatBandwidth(500)).toBe('500 Bits');
-  });
-
-  it('formats kilobits', () => {
-    expect(formatBandwidth(1500)).toBe('1.50 KBits');
-  });
-
-  it('formats megabits', () => {
-    expect(formatBandwidth(1500000)).toBe('1.50 MBits');
-  });
-
-  it('formats gigabits', () => {
-    expect(formatBandwidth(1500000000)).toBe('1.50 GBits');
-  });
-});
-
-describe('formatDate', () => {
-  it('formats ISO date to long format', () => {
-    const result = formatDate('2024-01-15');
-    expect(result).toContain('January');
-    // Date may vary by timezone, check range
-    expect(result).toMatch(/1[45]/); // 14 or 15 depending on timezone
-    expect(result).toContain('2024');
-  });
-});
 
 describe('formatDateShort', () => {
   it('formats ISO date to short format', () => {
@@ -138,16 +73,16 @@ describe('formatYear', () => {
 });
 
 describe('formatDateForUrl', () => {
-  it('formats date without leading zeros on month', () => {
+  it('formats date with zero-padded month', () => {
     const result = formatDateForUrl('2024-01-15');
-    // Month should not have leading zero
-    expect(result).toMatch(/^2024-1-/);
+    // Month should have leading zero for consistency with YYYY-MM-DD format
+    expect(result).toBe('2024-01-15');
   });
 
-  it('formats date without leading zeros on day', () => {
+  it('formats date with zero-padded day', () => {
     const result = formatDateForUrl('2024-06-05');
-    // Day should not have leading zero
-    expect(result).toMatch(/-[1-9]$/);
+    // Day should have leading zero for consistency with YYYY-MM-DD format
+    expect(result).toBe('2024-06-05');
   });
 
   it('preserves double-digit months and days', () => {
@@ -162,12 +97,12 @@ describe('formatDateForUrl', () => {
 
   it('handles year-start dates', () => {
     const result = formatDateForUrl('2024-01-01');
-    expect(result).toBe('2024-1-1');
+    expect(result).toBe('2024-01-01');
   });
 
   it('handles mid-year dates', () => {
     const result = formatDateForUrl('2024-06-15');
-    expect(result).toBe('2024-6-15');
+    expect(result).toBe('2024-06-15');
   });
 
   it('produces output parseable by parseDateFromUrl', () => {
@@ -184,7 +119,7 @@ describe('formatDateForUrl', () => {
 
   it('handles leap year date', () => {
     const result = formatDateForUrl('2024-02-29');
-    expect(result).toBe('2024-2-29');
+    expect(result).toBe('2024-02-29');
   });
 
   it('uses UTC to avoid timezone issues', () => {
@@ -192,6 +127,6 @@ describe('formatDateForUrl', () => {
     // The exact output depends on the date, but it should be consistent
     const result = formatDateForUrl('2024-01-01');
     // Should always produce the same output regardless of local timezone
-    expect(result).toMatch(/^2024-1-1$/);
+    expect(result).toBe('2024-01-01');
   });
 });
