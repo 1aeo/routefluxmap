@@ -66,6 +66,7 @@ Fetches Tor relay data and uploads to storage backends.
 | `upload-r2.sh` | Upload to Cloudflare R2 |
 | `upload-do.sh` | Upload to DigitalOcean Spaces |
 | `upload-common.sh` | Shared functions |
+| `cron-manage.sh` | Install/verify/manage cron jobs |
 
 ### Configuration
 
@@ -92,12 +93,23 @@ DO_SPACES_BUCKET=routefluxmap-data
 
 ### Cron Setup
 
-Add to crontab for automatic updates:
+Install automatic updates using the cron management script:
 
 ```bash
-# Every 4 hours
-0 */4 * * * /path/to/routefluxmap/deploy/scripts/update.sh >> /path/to/routefluxmap/deploy/logs/update.log 2>&1
+# Install cron job (uses /etc/cron.d/ for safety)
+sudo ./scripts/cron-manage.sh install
+
+# Verify installation
+./scripts/cron-manage.sh verify
+
+# Show all config + logs
+./scripts/cron-manage.sh show
+
+# Remove if needed
+sudo ./scripts/cron-manage.sh remove
 ```
+
+See [Cron Setup](../docs/setup/cron.md) for schedule options and troubleshooting.
 
 ---
 

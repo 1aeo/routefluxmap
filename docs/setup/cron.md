@@ -1,37 +1,65 @@
 # Cron Setup for Data Updates
 
-RouteFluxMap uses a local cron job to fetch and upload data periodically.
+RouteFluxMap uses cron to fetch and upload data periodically.
 
 ## Quick Setup
 
+We use `/etc/cron.d/` drop-in files instead of user crontab. This is safer - each project's cron jobs are isolated and can't accidentally overwrite each other.
+
 ```bash
-# 1. Copy config template
-cd ~/routefluxmap/deploy
-cp config.env.template config.env
+# Install cron jobs (requires sudo)
+sudo ./deploy/scripts/cron-manage.sh install
 
-# 2. Edit config with your credentials
-nano config.env
-
-# 3. Make scripts executable
-chmod +x scripts/*.sh
-
-# 4. Add cron job
-crontab -e
+# Verify installation
+./deploy/scripts/cron-manage.sh verify
 ```
 
-Add this line:
-```
-0 */4 * * * /home/tor/routefluxmap/deploy/scripts/update.sh >> /home/tor/routefluxmap/deploy/logs/update.log 2>&1
+That's it! The cron job will run every 4 hours.
+
+## Why /etc/cron.d/ Instead of User Crontab?
+
+| Aspect | User Crontab | /etc/cron.d/ |
+|--------|--------------|--------------|
+| Isolation | All jobs in one file | Per-project files |
+| Overwrite risk | `crontab file` wipes everything | Each project separate |
+| Version control | Not in git | Template tracked in repo |
+| Recovery | Need backups | Just re-run install |
+| Visibility | `crontab -l` | `cat /etc/cron.d/routefluxmap` |
+
+## Cron Management Commands
+
+```bash
+# Install cron jobs to /etc/cron.d/ (requires sudo)
+sudo ./deploy/scripts/cron-manage.sh install
+
+# Verify cron jobs are installed (returns exit code for monitoring)
+./deploy/scripts/cron-manage.sh verify
+
+# Show all cron configuration and recent logs
+./deploy/scripts/cron-manage.sh show
+
+# Backup current user crontab
+./deploy/scripts/cron-manage.sh backup
+
+# Migrate entries from user crontab to /etc/cron.d/
+./deploy/scripts/cron-manage.sh migrate
+
+# Remove cron jobs (requires sudo)
+sudo ./deploy/scripts/cron-manage.sh remove
 ```
 
 ## Cron Schedule Options
 
+The default schedule is every 4 hours (`0 */4 * * *`). To change it, edit `deploy/configs/routefluxmap.cron.d`:
+
 | Schedule | Cron Expression | Description |
 |----------|-----------------|-------------|
-| Every 4 hours | `0 */4 * * *` | Recommended for production |
+| Every 4 hours | `0 */4 * * *` | **Default** |
 | Every hour | `0 * * * *` | More frequent updates |
 | Every 30 min | `*/30 * * * *` | Near real-time (high API load) |
-| Daily at 6am | `0 6 * * *` | Once per day |
+| Daily at 4am | `0 4 * * *` | Once per day |
+
+After editing, re-run: `sudo ./deploy/scripts/cron-manage.sh install`
 
 ## What the Update Script Does
 
@@ -49,24 +77,22 @@ Add this line:
 # Watch live updates
 tail -f ~/routefluxmap/deploy/logs/update.log
 
-# Last 50 lines
-tail -50 ~/routefluxmap/deploy/logs/update.log
+# Show recent logs + cron config
+./deploy/scripts/cron-manage.sh show
 ```
 
-### Check Cron Status
+### Verify Cron (for external monitoring)
+
+The `verify` command returns exit code 0 if cron is installed, 1 if not:
 
 ```bash
-# List current cron jobs
-crontab -l
-
-# Check if cron is running
-systemctl status cron
+./deploy/scripts/cron-manage.sh verify
+echo $?  # 0 = OK, 1 = problem
 ```
 
 ### Manual Run
 
 ```bash
-# Run update manually
 ~/routefluxmap/deploy/scripts/update.sh
 ```
 
@@ -74,40 +100,36 @@ systemctl status cron
 
 ### Cron job not running
 
-1. Check cron is installed and running:
-   ```bash
-   systemctl status cron
-   ```
-
-2. Check the log file exists and is writable:
-   ```bash
-   touch ~/routefluxmap/deploy/logs/update.log
-   ```
-
-3. Verify the script path is absolute, not relative
-
-### Script fails silently
-
-Add error logging:
 ```bash
-set -euo pipefail
-exec 2>&1
+# Full status check
+./deploy/scripts/cron-manage.sh verify
+
+# Check cron service
+systemctl status cron
+
+# Check syslog for cron errors
+grep CRON /var/log/syslog | tail -20
 ```
+
+### Duplicate entries (user crontab + cron.d)
+
+If you previously used user crontab, migrate to cron.d:
+
+```bash
+./deploy/scripts/cron-manage.sh migrate
+```
+
+This backs up and removes routefluxmap entries from user crontab.
 
 ### Permission issues
 
-Make sure scripts are executable:
+The cron.d file must be owned by root with mode 644:
+
 ```bash
-chmod +x ~/routefluxmap/deploy/scripts/*.sh
+sudo chown root:root /etc/cron.d/routefluxmap
+sudo chmod 644 /etc/cron.d/routefluxmap
 ```
 
 ## Environment
 
-Cron runs with a minimal environment. If you need specific paths:
-
-```bash
-# At the top of update.sh
-export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/bin"
-export HOME="/home/tor"
-```
-
+Cron runs with a minimal environment. The update script handles this by setting PATH explicitly. If you need additional environment variables, add them to `deploy/config.env`.
