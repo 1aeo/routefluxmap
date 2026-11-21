@@ -25,7 +25,9 @@ fi
 export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/bin${NVM_LATEST_NODE_DIR:+:$NVM_LATEST_NODE_DIR/bin}:/usr/local/node/bin:$PATH"
 
 # Ensure node is available (try common locations)
-if ! command -v node &>/dev/null; then
+NODE_CMD="${NODE_CMD:-node}"
+NPX_CMD="${NPX_CMD:-npx}"
+if ! command -v "$NODE_CMD" &>/dev/null; then
     for node_path in "$HOME/.nvm/versions/node"/*/bin "$HOME/.local/bin" "/usr/local/bin"; do
         if [[ -x "$node_path/node" ]]; then
             export PATH="$node_path:$PATH"
@@ -220,7 +222,8 @@ get_date_count() {
 
 # Run storage uploads (R2 and DO in parallel)
 # When both R2 and DO are enabled, R2 takes the single daily local backup while
-# DO skips duplicate local backup download via --no-local-backup.
+# DO skips duplicate local backup download via --no-local-backup; if R2 does not
+# complete today's local backup, healthy DO falls back to --local-backup-only.
 run_uploads() {
     local label="$1"
 
@@ -229,11 +232,14 @@ run_uploads() {
     fi
 
     log "🚀 $label..."
-    local UPLOAD_START R2_PID="" DO_PID=""
+    local UPLOAD_START R2_PID="" DO_PID="" r2_result_file="" r2_backup_result=""
     UPLOAD_START=$(date +%s)
 
     if [[ "$R2_ENABLED" == "true" ]]; then
-        "$SCRIPT_DIR/upload-r2.sh" "$OUTPUT_DIR" &
+        if [[ "$DO_ENABLED" == "true" ]]; then
+            r2_result_file=$(mktemp "$DEPLOY_DIR/logs/.r2-local-backup.XXXXXX" 2>/dev/null || echo "")
+        fi
+        ROUTEFLUXMAP_LOCAL_BACKUP_RESULT_FILE="$r2_result_file" "$SCRIPT_DIR/upload-r2.sh" "$OUTPUT_DIR" &
         R2_PID=$!
     fi
 
@@ -265,6 +271,20 @@ run_uploads() {
         fi
     fi
 
+    if [[ "$R2_ENABLED" == "true" && "$DO_ENABLED" == "true" && "$do_exit" -eq 0 ]]; then
+        if [[ -n "$r2_result_file" && -f "$r2_result_file" ]]; then
+            r2_backup_result=$(cat "$r2_result_file" 2>/dev/null || true)
+        fi
+        if [[ "$r2_exit" -ne 0 || "$r2_backup_result" == "failed" || "$r2_backup_result" == "skipped" ]]; then
+            log "   🔁 R2 did not complete today's local backup (${r2_backup_result:-exit $r2_exit}); falling back to DO..."
+            "$SCRIPT_DIR/upload-do.sh" --local-backup-only "$OUTPUT_DIR" || \
+                log "   ⚠ DO fallback local backup had issues (non-fatal)"
+        fi
+    fi
+    if [[ -n "$r2_result_file" ]]; then
+        rm -f -- "$r2_result_file"
+    fi
+
     local DURATION TIME
     DURATION=$(($(date +%s) - UPLOAD_START))
     TIME=$(printf '%dm%02ds' $((DURATION/60)) $((DURATION%60)))
@@ -279,7 +299,7 @@ run_uploads() {
 # Backfill empty country files (Tor Metrics has ~3 day delay)
 run_backfill() {
     log "🔄 Checking for country data to backfill..."
-    if npx tsx scripts/fetch-all-data.ts --backfill-countries; then
+    if "$NPX_CMD" tsx scripts/fetch-all-data.ts --backfill-countries; then
         log "✅ Country backfill completed"
     else
         log "⚠️ Country backfill had issues (non-fatal)"
@@ -299,12 +319,12 @@ log "  DO enabled:      $DO_ENABLED"
 log ""
 
 # Step 1: Verify dependencies
-if ! command -v node &>/dev/null; then
+if ! command -v "$NODE_CMD" &>/dev/null; then
     log "❌ Node.js not found in PATH"
     exit 1
 fi
 
-log "📦 Using Node.js $(node --version)"
+log "📦 Using Node.js $("$NODE_CMD" --version)"
 
 # Step 2: Build fetch command
 cd "$PROJECT_DIR"
@@ -335,7 +355,7 @@ if [[ "$RUN_MODE" == "year" ]]; then
         esac
 
         log "   Starting Q${Q} ($MONTHS)..."
-        npx tsx scripts/fetch-all-data.ts "$MONTHS" --parallel=8 &
+        "$NPX_CMD" tsx scripts/fetch-all-data.ts "$MONTHS" --parallel=8 &
         QUARTER_PIDS+=($!)
     done
 
@@ -405,7 +425,7 @@ elif [[ "$UPLOAD_INTERVAL" -eq 0 ]]; then
     # Simple mode: fetch, then upload once at end
     log "📡 Fetching data..."
 
-    if npx tsx scripts/fetch-all-data.ts ${FETCH_ARGS[@]+"${FETCH_ARGS[@]}"}; then
+    if "$NPX_CMD" tsx scripts/fetch-all-data.ts ${FETCH_ARGS[@]+"${FETCH_ARGS[@]}"}; then
         log "✅ Data fetch completed"
     else
         log "❌ Data fetch failed"
@@ -422,7 +442,7 @@ else
     LAST_UPLOAD_COUNT=$INITIAL_COUNT
 
     # Start fetch in background
-    npx tsx scripts/fetch-all-data.ts ${FETCH_ARGS[@]+"${FETCH_ARGS[@]}"} &
+    "$NPX_CMD" tsx scripts/fetch-all-data.ts ${FETCH_ARGS[@]+"${FETCH_ARGS[@]}"} &
     FETCH_PID=$!
 
     log "   Fetch PID: $FETCH_PID"

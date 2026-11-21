@@ -35,7 +35,9 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y shellcheck
           fi
-          bash -n deploy/scripts/*.sh deploy/tests/*.sh
+          for script in deploy/scripts/*.sh deploy/tests/*.sh; do
+            bash -n "$script"
+          done
           shellcheck -x -e SC1091 \
             deploy/scripts/backup-maintenance.sh \
             deploy/scripts/cron-manage.sh \

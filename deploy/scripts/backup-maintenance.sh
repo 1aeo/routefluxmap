@@ -22,6 +22,7 @@ DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 _ENV_BACKUP_DIR="${BACKUP_DIR-}"
 _ENV_KEEP_BACKUPS="${KEEP_BACKUPS-}"
 _ENV_LOG_DIR="${LOG_DIR-}"
+_ENV_LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE-}"
 
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     # shellcheck source=/dev/null
@@ -31,10 +32,12 @@ fi
 [[ -n "$_ENV_BACKUP_DIR" ]] && BACKUP_DIR="$_ENV_BACKUP_DIR"
 [[ -n "$_ENV_KEEP_BACKUPS" ]] && KEEP_BACKUPS="$_ENV_KEEP_BACKUPS"
 [[ -n "$_ENV_LOG_DIR" ]] && LOG_DIR="$_ENV_LOG_DIR"
+[[ -n "$_ENV_LOCAL_BACKUP_LOCK_FILE" ]] && LOCAL_BACKUP_LOCK_FILE="$_ENV_LOCAL_BACKUP_LOCK_FILE"
 
 BACKUP_DIR="${BACKUP_DIR:-$HOME/routefluxmap-backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-7}"
 LOG_DIR="${LOG_DIR:-$DEPLOY_DIR/logs}"
+LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$LOG_DIR/.local-backup.lock}"
 mkdir -p "$LOG_DIR"
 
 DRY_RUN=false
@@ -48,7 +51,7 @@ cleanup_on_exit() {
         rm -f -- "$CURRENT_TMP_ARCHIVE" 2>/dev/null || true
     fi
     if [[ "${_LOCK_OPEN:-false}" == "true" ]]; then
-        exec 8>&- 2>/dev/null || true
+        exec 8>&-
         _LOCK_OPEN=false
     fi
 }
@@ -144,17 +147,36 @@ fi
 # Clean stale temp artifacts (>24h old)
 # ============================================================================
 cleanup_stale_temps() {
-    local item base
+    local item base run_dir_cleanup=true local_lock_open=false
 
-    while IFS= read -r -d '' item; do
-        base=$(basename "$item")
-        if [[ "$DRY_RUN" == "true" ]]; then
-            dry "Would remove stale temp directory $base"
-        else
-            rm -rf -- "$item"
-            log "   🗑️  Removed stale temp directory: $base"
+    # Do not delete stale .tmp-backup-* dirs while a local backup holds LOCAL_BACKUP_LOCK_FILE
+    # (rclone updates files inside subdirectories, leaving top-level dir mtime stale).
+    if [[ -n "${LOCAL_BACKUP_LOCK_FILE:-}" && -f "$LOCAL_BACKUP_LOCK_FILE" ]] && command -v flock >/dev/null 2>&1; then
+        exec 7>"$LOCAL_BACKUP_LOCK_FILE"
+        local_lock_open=true
+        if ! flock -n 7; then
+            exec 7>&-
+            local_lock_open=false
+            run_dir_cleanup=false
+            log "   ⏭️  Skipping stale temp backup cleanup (local backup lock is held)"
         fi
-    done < <(find "$BACKUP_DIR" -maxdepth 1 -type d -name '.tmp-backup-*' -mmin +1440 -print0 2>/dev/null)
+    fi
+
+    if [[ "$run_dir_cleanup" == "true" ]]; then
+        while IFS= read -r -d '' item; do
+            base=$(basename "$item")
+            if [[ "$DRY_RUN" == "true" ]]; then
+                dry "Would remove stale temp directory $base"
+            else
+                rm -rf -- "$item"
+                log "   🗑️  Removed stale temp directory: $base"
+            fi
+        done < <(find "$BACKUP_DIR" -maxdepth 1 -type d -name '.tmp-backup-*' -mmin +1440 -print0 2>/dev/null)
+    fi
+
+    if [[ "$local_lock_open" == "true" ]]; then
+        exec 7>&-
+    fi
 
     while IFS= read -r -d '' item; do
         base=$(basename "$item")
@@ -211,16 +233,16 @@ compress_month() {
             return 0
         fi
 
-        log "   ⚠️  Existing archive is corrupt: $archive_name — will rebuild from $(basename "${month_backups[-1]}")"
+        log "   ⚠️  Existing archive is corrupt: $archive_name — will rebuild from $(basename "${month_backups[${#month_backups[@]}-1]}")"
         if [[ "$DRY_RUN" == "true" ]]; then
-            dry "Would rebuild corrupt $archive_name from $(basename "${month_backups[-1]}")"
+            dry "Would rebuild corrupt $archive_name from $(basename "${month_backups[${#month_backups[@]}-1]}")"
             dry "Would remove ${#month_backups[@]} daily backup dirs"
             return 0
         fi
     fi
 
     # Pick the last (most recent) backup of the month to archive
-    local last_backup="${month_backups[-1]}"
+    local last_backup="${month_backups[${#month_backups[@]}-1]}"
     local last_name
     last_name=$(basename "$last_backup")
 
@@ -371,21 +393,21 @@ else
 
     if [[ "$PRUNE_ONLY" != "true" ]]; then
         log "🔍 Scanning for completed months to compress..."
-        declare -A MONTHS_FOUND
+        months_raw=""
         for dir in "$BACKUP_DIR"/backup-????-??-*; do
             [[ -d "$dir" ]] || continue
             local_name=$(basename "$dir")
             [[ "$local_name" == *.tmp.* ]] && continue
             if [[ "$local_name" =~ ^backup-([0-9]{4}-[0-9]{2})- ]]; then
                 ym="${BASH_REMATCH[1]}"
-                [[ "$ym" != "$CURRENT_YEAR_MONTH" ]] && MONTHS_FOUND["$ym"]=1
+                [[ "$ym" != "$CURRENT_YEAR_MONTH" ]] && months_raw+="${ym}"$'\n'
             fi
         done
 
-        if [[ ${#MONTHS_FOUND[@]} -eq 0 ]]; then
+        if [[ -z "$months_raw" ]]; then
             log "   No completed months with daily backups found"
         else
-            for ym in $(printf '%s\n' "${!MONTHS_FOUND[@]}" | sort); do
+            for ym in $(printf '%s' "$months_raw" | LC_ALL=C sort -u); do
                 year_full="${ym:0:4}"
                 month="${ym:5:2}"
                 log "📅 ${ym} (completed) — compressing..."

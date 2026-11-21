@@ -38,8 +38,15 @@ cmd_install() {
     if [[ $EUID -ne 0 ]]; then
         err "Requires sudo: sudo $0 install"; exit 1
     fi
-    gen_content > "$CRON_D_FILE"
-    chmod 644 "$CRON_D_FILE"; chown root:root "$CRON_D_FILE"
+    local tmp
+    tmp=$(mktemp "${CRON_D_FILE}.XXXXXX")
+    if ! gen_content > "$tmp"; then
+        rm -f -- "$tmp"
+        err "Could not generate cron configuration (is envsubst installed?)"
+        exit 1
+    fi
+    chmod 644 "$tmp"; chown root:root "$tmp"
+    mv -f -- "$tmp" "$CRON_D_FILE"
     ok "Installed: $CRON_D_FILE"
     echo ""
     cat "$CRON_D_FILE"
@@ -51,19 +58,17 @@ cmd_verify() {
     log "Verifying cron jobs..."; echo ""
     local found_crond=false found_user=false exit_code=0
 
-    # Check /etc/cron.d/
-    if [[ -f "$CRON_D_FILE" ]] && grep -q "update.sh" "$CRON_D_FILE" 2>/dev/null; then
+    # Check /etc/cron.d/ (ignoring comments)
+    if [[ -f "$CRON_D_FILE" ]] && grep -Eq '^[[:space:]]*[^#].*update\.sh' "$CRON_D_FILE" 2>/dev/null; then
         ok "/etc/cron.d/routefluxmap: update job ✓"
         found_crond=true
-        if grep -q "backup-maintenance.sh" "$CRON_D_FILE" 2>/dev/null; then
-            if grep -Eq '^[[:space:]]*0[[:space:]]+3[[:space:]]+1[[:space:]]+\*[[:space:]]+\*.*backup-maintenance\.sh' "$CRON_D_FILE"; then
-                warn "/etc/cron.d/routefluxmap: backup-maintenance is still monthly (0 3 1 * *); run 'sudo $0 install' to switch to daily"
-                exit_code=1
-            else
-                ok "/etc/cron.d/routefluxmap: backup-maintenance job (daily) ✓"
-            fi
+        if grep -Eq '^[[:space:]]*0[[:space:]]+3[[:space:]]+1[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*backup-maintenance\.sh' "$CRON_D_FILE" 2>/dev/null; then
+            warn "/etc/cron.d/routefluxmap: backup-maintenance is still monthly (0 3 1 * *); run 'sudo $0 install' to switch to daily"
+            exit_code=1
+        elif grep -Eq '^[[:space:]]*(([0-9*,/-]+[[:space:]]+){2}\*[[:space:]]+\*[[:space:]]+\*|@daily)[[:space:]]+.*backup-maintenance\.sh' "$CRON_D_FILE" 2>/dev/null; then
+            ok "/etc/cron.d/routefluxmap: backup-maintenance job (daily) ✓"
         else
-            warn "/etc/cron.d/routefluxmap: backup-maintenance job missing (run 'sudo $0 install')"
+            warn "/etc/cron.d/routefluxmap: active daily backup-maintenance job missing (run 'sudo $0 install')"
             exit_code=1
         fi
     else

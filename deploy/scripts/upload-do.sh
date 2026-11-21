@@ -17,6 +17,7 @@ ACTION=""
 SOURCE_DIR_ARG=""
 FORCE_BACKUP=false
 CLI_SKIP_LOCAL_BACKUP=false
+LOCAL_BACKUP_ONLY=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --list-backups)
@@ -29,6 +30,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-local-backup)
             CLI_SKIP_LOCAL_BACKUP=true
+            shift
+            ;;
+        --local-backup-only)
+            LOCAL_BACKUP_ONLY=true
             shift
             ;;
         --help|-h)
@@ -119,6 +124,12 @@ if [[ "$DO_USE_CDN" == "true" ]]; then
     log "   Mode: CDN (faster, may cache up to 1hr)"
 else
     log "   Mode: Origin (always fresh)"
+fi
+
+if [[ "$LOCAL_BACKUP_ONLY" == "true" ]]; then
+    create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || true
+    print_sync_summary
+    exit 0
 fi
 
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || true

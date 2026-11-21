@@ -23,7 +23,7 @@ cleanup_local_backup_staging() {
     fi
     _LOCAL_BACKUP_STAGING=""
     if [[ "${_LOCAL_BACKUP_LOCK_OPEN:-false}" == "true" ]]; then
-        exec 7>&- 2>/dev/null || true
+        exec 7>&-
         _LOCAL_BACKUP_LOCK_OPEN=false
     fi
 }
@@ -112,7 +112,7 @@ backup_needed() {
 
 _release_local_backup_lock() {
     if [[ "${_LOCAL_BACKUP_LOCK_OPEN:-false}" == "true" ]]; then
-        exec 7>&- 2>/dev/null || true
+        exec 7>&-
         _LOCAL_BACKUP_LOCK_OPEN=false
     fi
 }
@@ -123,13 +123,20 @@ create_local_backup() {
     local force_flag="${3:-false}"
     local daily_setting="${4:-true}"
     local staging_dir final_dir status=0
+    _LOCAL_BACKUP_OUTCOME="failed"
 
     if [[ "${SKIP_LOCAL_BACKUP:-false}" == "true" && "$force_flag" != "true" ]]; then
+        _LOCAL_BACKUP_OUTCOME="skipped_disabled"
         log "⏭️  Skipping local backup (disabled for this run)"
         return 1
     fi
 
     if ! backup_needed "$marker_file" "$daily_setting" "$force_flag"; then
+        if [[ "$daily_setting" != "true" && "$force_flag" != "true" ]]; then
+            _LOCAL_BACKUP_OUTCOME="skipped_disabled"
+        else
+            _LOCAL_BACKUP_OUTCOME="already_done"
+        fi
         log "⏭️  Skipping local backup (already done today)"
         return 1
     fi
@@ -140,12 +147,14 @@ create_local_backup() {
         _LOCAL_BACKUP_LOCK_OPEN=true
         if ! flock -n 7; then
             _release_local_backup_lock
+            _LOCAL_BACKUP_OUTCOME="locked"
             log "⏭️  Skipping local backup (another local backup is already in progress)"
             return 1
         fi
         # Re-check after acquiring the lock in case a concurrent run just completed.
         if ! backup_needed "$marker_file" "$daily_setting" "$force_flag"; then
             _release_local_backup_lock
+            _LOCAL_BACKUP_OUTCOME="already_done"
             log "⏭️  Skipping local backup (already done today)"
             return 1
         fi
@@ -170,6 +179,7 @@ create_local_backup() {
         rm -rf -- "$staging_dir"
         _LOCAL_BACKUP_STAGING=""
         _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
         log "   ❌ Local backup failed (rclone exit $status); today's backup is not marked done"
         return "$status"
     fi
@@ -178,6 +188,7 @@ create_local_backup() {
         rm -rf -- "$staging_dir"
         _LOCAL_BACKUP_STAGING=""
         _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
         log "   ❌ Failed to finalize local backup: $final_dir"
         return 1
     fi
@@ -185,10 +196,12 @@ create_local_backup() {
 
     if ! write_marker_file "$marker_file" "$TODAY"; then
         _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
         return 1
     fi
 
     _release_local_backup_lock
+    _LOCAL_BACKUP_OUTCOME="created"
     log "   ✅ Local backup created"
     return 0
 }

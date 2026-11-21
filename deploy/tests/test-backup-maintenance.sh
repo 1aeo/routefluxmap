@@ -81,13 +81,18 @@ exit 0
 EOF
 chmod +x "$MOCK_BIN/npx"
 
-# Always provide deterministic flock stub (contends when MOCK_FLOCK_CONTEND=1)
+# Always provide deterministic flock stub (contends when MOCK_FLOCK_CONTEND=1;
+# otherwise delegates to real flock when available so real locking works cleanly)
 MOCK_FLOCK_BIN="$TMP_DIR/mock-flock-bin"
 mkdir -p "$MOCK_FLOCK_BIN"
-cat > "$MOCK_FLOCK_BIN/flock" <<'EOF'
+REAL_FLOCK="$(command -v flock 2>/dev/null || true)"
+cat > "$MOCK_FLOCK_BIN/flock" <<EOF
 #!/usr/bin/env bash
-if [[ "${MOCK_FLOCK_CONTEND:-0}" == "1" ]]; then
+if [[ "\${MOCK_FLOCK_CONTEND:-0}" == "1" ]]; then
     exit 1
+fi
+if [[ -n "$REAL_FLOCK" ]]; then
+    exec "$REAL_FLOCK" "\$@"
 fi
 exit 0
 EOF
@@ -128,8 +133,10 @@ for d in 01 02 03; do
 done
 
 : > "$CALLS1"
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS1" \
-    "$PROJ1/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS1" \
+    "$PROJ1/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 1 update.sh failed"
+fi
 
 local_calls=$(grep -c '/.tmp-backup-' "$CALLS1" || true)
 r2_local_calls=$(grep -c 'sync r2-rfm:test-r2-bucket .*/.tmp-backup-' "$CALLS1" || true)
@@ -166,15 +173,47 @@ RCLONE_PATH=$MOCK_BIN/rclone
 EOF
 
 : > "$CALLS2"
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS2" \
-    "$PROJ2/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS2" \
+    "$PROJ2/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 2 update.sh failed"
+fi
 
 do_local_calls=$(grep -c 'sync spaces-rfm:test-do-bucket .*/.tmp-backup-' "$CALLS2" || true)
 [[ "$do_local_calls" == "1" ]] || fail "expected DO-only run to create 1 local backup, got $do_local_calls"
 pass "update.sh with R2 disabled lets DO take local backup"
 
 # ---------------------------------------------------------------------------
-# Test 3: Shared marker & flock contention prevent duplicate manual backups
+# Test 2b: update.sh falls back to DO local backup when R2 fails pre-checks
+# ---------------------------------------------------------------------------
+PROJ2B="$TMP_DIR/proj2b"
+setup_deploy_copy "$PROJ2B"
+CALLS2B="$TMP_DIR/calls2b.log"
+LAST_RUN_LOG="$TMP_DIR/run2b.log"
+cat > "$PROJ2B/deploy/config.env" <<EOF
+R2_ENABLED=true
+DO_ENABLED=true
+DO_SPACES_BUCKET=test-do-bucket
+DO_SPACES_KEY=dk
+DO_SPACES_SECRET=ds
+DO_SPACES_REGION=nyc3
+OUTPUT_DIR=$PROJ2B/public/data
+BACKUP_DIR=$PROJ2B/backups
+RCLONE_PATH=$MOCK_BIN/rclone
+EOF
+
+: > "$CALLS2B"
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS2B" \
+    "$PROJ2B/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 2b update.sh failed"
+fi
+
+do_local_calls=$(grep -c 'sync spaces-rfm:test-do-bucket .*/.tmp-backup-' "$CALLS2B" || true)
+[[ "$do_local_calls" == "1" ]] || fail "expected DO fallback local backup when R2 failed pre-checks, got $do_local_calls"
+[[ -f "$PROJ2B/deploy/logs/last-local-backup-date" ]] || fail "DO fallback did not write shared local backup marker"
+pass "update.sh falls back to DO local backup when R2 fails before creating local backup"
+
+# ---------------------------------------------------------------------------
+# Test 3: Shared marker, flock contention, and post-lock stderr preservation
 # ---------------------------------------------------------------------------
 PROJ3="$TMP_DIR/proj3"
 setup_deploy_copy "$PROJ3"
@@ -197,22 +236,30 @@ RCLONE_PATH=$MOCK_BIN/rclone
 EOF
 
 : > "$CALLS3"
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS3" \
-    "$PROJ3/deploy/scripts/upload-r2.sh" "$PROJ3/public/data" > "$LAST_RUN_LOG" 2>&1
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS3" \
-    "$PROJ3/deploy/scripts/upload-do.sh" "$PROJ3/public/data" >> "$LAST_RUN_LOG" 2>&1
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS3" \
+    "$PROJ3/deploy/scripts/upload-r2.sh" "$PROJ3/public/data" > "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 3 upload-r2.sh failed"
+fi
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS3" \
+    "$PROJ3/deploy/scripts/upload-do.sh" "$PROJ3/public/data" >> "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 3 upload-do.sh failed"
+fi
 local_calls=$(grep -c '/.tmp-backup-' "$CALLS3" || true)
 [[ "$local_calls" == "1" ]] || fail "sequential R2 then DO created $local_calls local backups instead of 1"
 
 rm -f "$PROJ3/deploy/logs/last-local-backup-date"
 : > "$CALLS3"
-PATH="$MOCK_FLOCK_BIN:$MOCK_BIN:$PATH" MOCK_FLOCK_CONTEND=1 MOCK_RCLONE_CALLS="$CALLS3" \
-    "$PROJ3/deploy/scripts/upload-do.sh" "$PROJ3/public/data" > "$LAST_RUN_LOG" 2>&1
+if PATH="$MOCK_FLOCK_BIN:$MOCK_BIN:$PATH" MOCK_FLOCK_CONTEND=1 MOCK_FAIL_UPLOAD=1 MOCK_RCLONE_CALLS="$CALLS3" \
+    "$PROJ3/deploy/scripts/upload-do.sh" "$PROJ3/public/data" > "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 3 upload failure did not exit non-zero"
+fi
 grep -Fq 'another local backup is already in progress' "$LAST_RUN_LOG" || \
     fail "flock contention was not logged"
+grep -Fq 'mock upload failure' "$LAST_RUN_LOG" || \
+    fail "stderr was lost after flock release"
 [[ "$(grep -c '/.tmp-backup-' "$CALLS3" || true)" == "0" ]] || \
     fail "flock contention still ran local backup"
-pass "shared marker and flock contention prevent duplicate local backups"
+pass "shared marker, flock contention, and post-lock stderr preservation work"
 
 # ---------------------------------------------------------------------------
 # Test 4: Failed backups clean staging dir, keep marker unset, and fail upload
@@ -232,8 +279,10 @@ RCLONE_PATH=$MOCK_BIN/rclone
 EOF
 
 : > "$CALLS4"
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS4" MOCK_FAIL_LOCAL_BACKUP=1 \
-    "$PROJ4/deploy/scripts/upload-r2.sh" "$PROJ4/public/data" > "$LAST_RUN_LOG" 2>&1
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS4" MOCK_FAIL_LOCAL_BACKUP=1 \
+    "$PROJ4/deploy/scripts/upload-r2.sh" "$PROJ4/public/data" > "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 4 upload-r2.sh with failing local backup exited non-zero"
+fi
 [[ ! -e "$PROJ4/deploy/logs/last-local-backup-date" ]] || fail "failed local backup wrote marker"
 leftover_tmp=$(find "$PROJ4/backups" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
 [[ "$leftover_tmp" == "0" ]] || fail "failed local backup left staging files behind: $leftover_tmp"
@@ -275,8 +324,17 @@ for d in 01 02 03 04; do
     printf 'cur %s\n' "$d" > "$PROJ5/backups/backup-${CUR_YM}-${d}_000100/data.json"
 done
 
-# 5a: --prune-only leaves completed-month daily backups and corrupt archive untouched
-PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" --prune-only > "$LAST_RUN_LOG" 2>&1
+# 5a: Lock-held backup-maintenance.sh skips removing stale .tmp-backup-* while lock is held
+touch "$PROJ5/deploy/logs/.local-backup.lock"
+if ! PATH="$MOCK_FLOCK_BIN:$PATH" MOCK_FLOCK_CONTEND=1 "$PROJ5/deploy/scripts/backup-maintenance.sh" --prune-only > "$LAST_RUN_LOG" 2>&1; then
+    fail "backup-maintenance.sh --prune-only failed under lock contention"
+fi
+[[ -d "$PROJ5/backups/.tmp-backup-stale" ]] || fail "stale .tmp-backup was removed while lock held"
+
+# 5a-2: --prune-only leaves completed-month daily backups and corrupt archive untouched
+if ! PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" --prune-only > "$LAST_RUN_LOG" 2>&1; then
+    fail "backup-maintenance.sh --prune-only failed"
+fi
 [[ ! -e "$PROJ5/backups/.tmp-backup-stale" ]] || fail "stale .tmp-backup was not removed"
 [[ -d "$PROJ5/backups/.tmp-backup-fresh" ]] || fail "fresh .tmp-backup was removed prematurely"
 [[ ! -e "$PROJ5/backups/backup-2025-12.tar.gz.tmp.999" ]] || fail "stale .tar.gz.tmp was not removed"
@@ -286,13 +344,17 @@ PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" --pru
     fail "--prune-only unexpectedly touched completed month backups"
 
 # 5b: --dry-run on full run reports corrupt archive without deleting daily backups
-PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" --dry-run > "$LAST_RUN_LOG" 2>&1
+if ! PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" --dry-run > "$LAST_RUN_LOG" 2>&1; then
+    fail "backup-maintenance.sh --dry-run failed"
+fi
 grep -Fq 'Existing archive is corrupt' "$LAST_RUN_LOG" || fail "dry-run did not report corrupt archive"
 [[ $(find "$PROJ5/backups" -maxdepth 1 -type d -name "backup-${PREV_YM}-*" | wc -l | tr -d ' ') == "3" ]] || \
     fail "dry-run removed daily backups"
 
 # 5c: Full run rebuilds corrupt archive, verifies gzip -t, removes daily backups, no duplicate lines
-PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" > "$LAST_RUN_LOG" 2>&1
+if ! PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" > "$LAST_RUN_LOG" 2>&1; then
+    fail "backup-maintenance.sh full run failed"
+fi
 gzip -t "$PROJ5/backups/backup-${PREV_YM}.tar.gz" || fail "rebuilt archive failed gzip -t"
 tar_content=$(tar -tzf "$PROJ5/backups/backup-${PREV_YM}.tar.gz")
 grep -Fq "backup-${PREV_YM}-28_000100/data.json" <<< "$tar_content" || fail "archive did not contain last backup of month"
@@ -302,6 +364,13 @@ grep -Fq "backup-${PREV_YM}-28_000100/data.json" <<< "$tar_content" || fail "arc
     fail "temp archive remained after compression"
 dup_count=$(awk '/Backup directory contents:/{flag=1} flag' "$LAST_RUN_LOG" | grep -c "backup-${PREV_YM}.tar.gz$" || true)
 [[ "$dup_count" == "1" ]] || fail "expected 1 summary line for archive, got $dup_count"
+
+# 5c-2: Re-running full backup-maintenance.sh with zero completed months succeeds under nounset
+if ! PATH="$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-maintenance.sh" > "$LAST_RUN_LOG" 2>&1; then
+    fail "backup-maintenance.sh failed when zero completed months remained (MONTHS_FOUND under set -u)"
+fi
+grep -Fq 'No completed months with daily backups found' "$LAST_RUN_LOG" || \
+    fail "expected empty completed-months message"
 
 # 5d: Failed tar leaves last daily backup intact
 mkdir -p "$PROJ5/backups/backup-2025-11-30_000100"
@@ -342,15 +411,42 @@ UPDATE_LOG_ARCHIVES=2
 EOF
 
 printf '1234567890123456789012345\n' > "$PROJ6/deploy/logs/update.log"
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS6" \
-    "$PROJ6/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
+    "$PROJ6/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1; then
+    fail "Test 6 step 1 update.sh failed"
+fi
 [[ -f "$PROJ6/deploy/logs/update.log.1" && ! -e "$PROJ6/deploy/logs/update.log" ]] || \
     fail "step 1 rotation did not move update.log to update.log.1"
 
 printf 'new cron run log\n' > "$PROJ6/deploy/logs/update.log"
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS6" \
-    "$PROJ6/deploy/scripts/update.sh" >> "$PROJ6/deploy/logs/update.log" 2>&1
+if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
+    "$PROJ6/deploy/scripts/update.sh" >> "$PROJ6/deploy/logs/update.log" 2>&1; then
+    fail "Test 6 step 2 update.sh failed"
+fi
 [[ -f "$PROJ6/deploy/logs/update.log.1.gz" && ! -e "$PROJ6/deploy/logs/update.log.1" ]] || \
     fail "step 2 rotation did not gzip update.log.1"
 gzip -t "$PROJ6/deploy/logs/update.log.1.gz" || fail "rotated update.log.1.gz failed gzip -t"
 pass "update.sh 2-step cron-safe log rotation works"
+
+# ---------------------------------------------------------------------------
+# Test 7: cron-manage.sh cmd_verify ignores commented lines and accepts 30 6 * * *
+# ---------------------------------------------------------------------------
+PROJ7="$TMP_DIR/proj7"
+setup_deploy_copy "$PROJ7"
+CRON_D_MOCK="$TMP_DIR/mock-cron.d-routefluxmap"
+cat > "$CRON_D_MOCK" <<'EOF'
+0 */4 * * * tor /opt/update.sh
+# 30 6 * * * tor /opt/backup-maintenance.sh
+EOF
+if bash -c '
+    CRON_D_FILE="$1"
+    grep -Eq "^[[:space:]]*(([0-9*,/-]+[[:space:]]+){2}\\*[[:space:]]+\\*[[:space:]]+\\*|@daily)[[:space:]]+.*backup-maintenance\\.sh" "$CRON_D_FILE"
+' _ "$CRON_D_MOCK"; then
+    fail "commented backup-maintenance line matched daily check"
+fi
+sed 's/^# //' "$CRON_D_MOCK" > "${CRON_D_MOCK}.active"
+bash -c '
+    CRON_D_FILE="$1"
+    grep -Eq "^[[:space:]]*(([0-9*,/-]+[[:space:]]+){2}\\*[[:space:]]+\\*[[:space:]]+\\*|@daily)[[:space:]]+.*backup-maintenance\\.sh" "$CRON_D_FILE"
+' _ "${CRON_D_MOCK}.active" || fail "active 30 6 * * * line did not match daily check"
+pass "cron-manage verification pattern ignores comments and accepts daily schedule"
