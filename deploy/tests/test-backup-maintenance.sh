@@ -44,6 +44,9 @@ case "${1:-}" in
     sync)
         src="${2:-}"
         dst="${3:-}"
+        if [[ -n "${MOCK_BACKUP_SLEEP:-}" && "$dst" == */.tmp-backup-* ]]; then
+            sleep "$MOCK_BACKUP_SLEEP"
+        fi
         if [[ -n "${MOCK_FAIL_LOCAL_BACKUP:-}" && "$dst" == */.tmp-backup-* ]]; then
             mkdir -p "$dst"
             echo "mock local backup failure" >&2
@@ -446,33 +449,119 @@ fi
 [[ -f "$PROJ6/deploy/logs/update.log.1.gz" && ! -e "$PROJ6/deploy/logs/update.log.1" ]] || \
     fail "step 2 rotation did not gzip update.log.1"
 gzip -t "$PROJ6/deploy/logs/update.log.1.gz" || fail "rotated update.log.1.gz failed gzip -t"
-pass "update.sh 2-step cron-safe log rotation works"
+
+if PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
+    UPDATE_LOG_FILE="$PROJ6/deploy/logs/../../escaped.log" \
+    "$PROJ6/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1; then
+    fail "update.sh accepted path-traversal UPDATE_LOG_FILE"
+fi
+grep -Fq 'Refusing unsafe UPDATE_LOG_FILE=' "$LAST_RUN_LOG" || \
+    fail "path-traversal UPDATE_LOG_FILE rejection message missing"
+pass "update.sh 2-step cron-safe log rotation and canonical path check work"
 
 # ---------------------------------------------------------------------------
-# Test 7: cron-manage.sh cmd_verify ignores commented lines and accepts 30 6 * * *
+# Test 7: cron-manage.sh verification predicates ignore comments & non-exec text
 # ---------------------------------------------------------------------------
 PROJ7="$TMP_DIR/proj7"
 setup_deploy_copy "$PROJ7"
 CRON_D_MOCK="$TMP_DIR/mock-cron.d-routefluxmap"
+
 cat > "$CRON_D_MOCK" <<'EOF'
 0 */4 * * * tor /opt/update.sh
 # 30 6 * * * tor /opt/backup-maintenance.sh
 EOF
-if bash -c '
-    CRON_D_FILE="$1"
-    grep -Eq "^[[:space:]]*(([0-9*,/-]+[[:space:]]+){2}\\*[[:space:]]+\\*[[:space:]]+\\*|@daily)[[:space:]]+.*backup-maintenance\\.sh" "$CRON_D_FILE"
-' _ "$CRON_D_MOCK"; then
-    fail "commented backup-maintenance line matched daily check"
-fi
+bash -c '
+    set -euo pipefail
+    source "$1"
+    ! cron_d_has_daily_maintenance_job "$2"
+    cron_d_has_update_job "$2"
+' _ "$PROJ7/deploy/scripts/cron-manage.sh" "$CRON_D_MOCK" || \
+    fail "commented backup-maintenance line matched daily check or active update.sh missed"
+
 sed 's/^# //' "$CRON_D_MOCK" > "${CRON_D_MOCK}.active"
 bash -c '
-    CRON_D_FILE="$1"
-    grep -Eq "^[[:space:]]*(([0-9*,/-]+[[:space:]]+){2}\\*[[:space:]]+\\*[[:space:]]+\\*|@daily)[[:space:]]+.*backup-maintenance\\.sh" "$CRON_D_FILE"
-' _ "${CRON_D_MOCK}.active" || fail "active 30 6 * * * line did not match daily check"
-printf '  # 0 */4 * * * tor /opt/update.sh\n' > "${CRON_D_MOCK}.indented"
-if bash -c '
-    grep -Eq "^[[:space:]]*[^#[:space:]].*update\\.sh" "$1"
-' _ "${CRON_D_MOCK}.indented"; then
-    fail "indented commented update.sh line matched active check"
+    set -euo pipefail
+    source "$1"
+    cron_d_has_daily_maintenance_job "$2"
+' _ "$PROJ7/deploy/scripts/cron-manage.sh" "${CRON_D_MOCK}.active" || \
+    fail "active 30 6 * * * line did not match daily check"
+
+cat > "${CRON_D_MOCK}.indented" <<'EOF'
+  # 0 */4 * * * tor /opt/update.sh
+30 6 * * * tor /usr/bin/echo backup-maintenance.sh >> /var/log/update.sh.log 2>&1
+EOF
+bash -c '
+    set -euo pipefail
+    source "$1"
+    ! cron_d_has_update_job "$2"
+    ! cron_d_has_daily_maintenance_job "$2"
+' _ "$PROJ7/deploy/scripts/cron-manage.sh" "${CRON_D_MOCK}.indented" || \
+    fail "indented comment, echo arg, or redirect target matched command check"
+
+cat > "${CRON_D_MOCK}.monthly" <<'EOF'
+0 */4 * * * tor /opt/update.sh
+0 3 1 * * tor /opt/backup-maintenance.sh
+EOF
+bash -c '
+    set -euo pipefail
+    source "$1"
+    cron_d_has_monthly_maintenance_job "$2"
+    ! cron_d_has_daily_maintenance_job "$2"
+' _ "$PROJ7/deploy/scripts/cron-manage.sh" "${CRON_D_MOCK}.monthly" || \
+    fail "monthly backup-maintenance entry check failed"
+pass "cron-manage verification predicates check scheduled command and ignore comments"
+
+# ---------------------------------------------------------------------------
+# Test 9: Wait timeout and locked coordinated fallback abort DO before live sync
+# ---------------------------------------------------------------------------
+PROJ9="$TMP_DIR/proj9"
+setup_deploy_copy "$PROJ9"
+CALLS9="$TMP_DIR/calls9.log"
+RESULT9="$TMP_DIR/r2-timeout.result"
+cat > "$PROJ9/deploy/config.env" <<EOF
+R2_ENABLED=true
+DO_ENABLED=true
+R2_BUCKET=test-r2-bucket
+R2_ACCESS_KEY_ID=k
+R2_SECRET_ACCESS_KEY=s
+CLOUDFLARE_ACCOUNT_ID=acc
+DO_SPACES_BUCKET=test-do-bucket
+DO_SPACES_KEY=dk
+DO_SPACES_SECRET=ds
+DO_SPACES_REGION=nyc3
+OUTPUT_DIR=$PROJ9/public/data
+BACKUP_DIR=$PROJ9/backups
+RCLONE_PATH=$MOCK_BIN/rclone
+EOF
+
+: > "$CALLS9"
+rm -f "$RESULT9"
+PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_BACKUP_SLEEP=2 MOCK_FAIL_LOCAL_BACKUP=1 \
+    MOCK_RCLONE_CALLS="$CALLS9" ROUTEFLUXMAP_LOCAL_BACKUP_RESULT_FILE="$RESULT9" \
+    "$PROJ9/deploy/scripts/upload-r2.sh" "$PROJ9/public/data" > "$TMP_DIR/r9-r2.log" 2>&1 &
+r9_r2_pid=$!
+PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS9" \
+    ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$RESULT9" ROUTEFLUXMAP_LOCAL_BACKUP_WAIT_TIMEOUT=1 \
+    "$PROJ9/deploy/scripts/upload-do.sh" "$PROJ9/public/data" > "$TMP_DIR/r9-do.log" 2>&1 &
+r9_do_pid=$!
+r9_r2_rc=0 r9_do_rc=0
+wait "$r9_r2_pid" || r9_r2_rc=$?
+wait "$r9_do_pid" || r9_do_rc=$?
+[[ "$r9_r2_rc" == "0" ]] || fail "Test 9 R2 exited non-zero ($r9_r2_rc) despite continuing after local backup failure"
+[[ "$r9_do_rc" != "0" ]] || fail "DO did not abort after wait timeout"
+[[ "$(grep -c 'spaces-rfm:test-do-bucket' "$CALLS9" || true)" == "0" ]] || \
+    fail "DO touched live bucket despite primary wait timeout"
+grep -Fq 'aborting DO upload to preserve pre-upload snapshot' "$TMP_DIR/r9-do.log" || \
+    fail "DO timeout abort message missing"
+
+printf 'failed\n' > "$RESULT9"
+: > "$CALLS9"
+rm -f "$PROJ9/deploy/logs/last-local-backup-date"
+if PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_FLOCK_CONTEND=1 MOCK_RCLONE_CALLS="$CALLS9" \
+    ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$RESULT9" \
+    "$PROJ9/deploy/scripts/upload-do.sh" "$PROJ9/public/data" > "$TMP_DIR/r9-locked.log" 2>&1; then
+    fail "coordinated DO fallback exited 0 despite lock contention"
 fi
-pass "cron-manage verification pattern ignores comments and accepts daily schedule"
+[[ "$(grep -c 'spaces-rfm:test-do-bucket' "$CALLS9" || true)" == "0" ]] || \
+    fail "coordinated locked fallback touched DO live bucket"
+pass "coordinated DO upload aborts safely without overwriting bucket on timeout or lock contention"

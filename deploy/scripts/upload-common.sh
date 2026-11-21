@@ -136,8 +136,8 @@ wait_for_primary_local_backup_result() {
         sleep 0.2
         iter=$((iter + 1))
     done
-    log "⚠️  Timed out waiting ${max_wait}s for primary local backup result; falling back"
-    return 1
+    log "⚠️  Timed out waiting ${max_wait}s for primary local backup result"
+    return 2
 }
 
 _release_local_backup_lock() {

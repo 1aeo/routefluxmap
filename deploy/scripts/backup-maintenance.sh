@@ -11,7 +11,7 @@
 #   ./backup-maintenance.sh --dry-run 12/25  # Dry-run for a specific month
 #
 # Cron (daily at 6:30am):
-#   30 6 * * * flock -n /tmp/routefluxmap-backup-maintenance.lock /path/to/deploy/scripts/backup-maintenance.sh >> /path/to/deploy/logs/backup-maintenance.log 2>&1
+#   30 6 * * * /path/to/deploy/scripts/backup-maintenance.sh >> /path/to/deploy/logs/backup-maintenance.log 2>&1
 
 set -euo pipefail
 

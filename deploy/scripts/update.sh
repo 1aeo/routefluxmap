@@ -178,32 +178,54 @@ rotate_update_log() {
     local max_bytes="${UPDATE_LOG_MAX_BYTES:-33554432}"
     local keep="${UPDATE_LOG_ARCHIVES:-3}"
     local allowed_dir="$DEPLOY_DIR/logs"
-    local index size
+    local allowed_real log_dir_raw log_dir_real log_base resolved_log index size
 
     if [[ ! "$max_bytes" =~ ^[1-9][0-9]*$ ]] || [[ ! "$keep" =~ ^[1-9][0-9]*$ ]]; then
         log "❌ Invalid log rotation setting (UPDATE_LOG_MAX_BYTES=$max_bytes, UPDATE_LOG_ARCHIVES=$keep)" >&2
         exit 2
     fi
 
-    if [[ "$log_file" != "$allowed_dir/"* || "$log_file" == "$allowed_dir/" ]]; then
-        log "❌ Refusing unsafe UPDATE_LOG_FILE=$log_file (expected file inside $allowed_dir)" >&2
+    if [[ -z "$log_file" || "$log_file" == */ ]]; then
+        log "❌ Refusing unsafe UPDATE_LOG_FILE=$log_file (expected regular file inside $allowed_dir)" >&2
         exit 2
     fi
 
-    if [[ -f "${log_file}.1" && -e "$log_file" ]]; then
-        rm -f -- "${log_file}.${keep}.gz"
-        for ((index=keep-1; index>=1; index--)); do
-            if [[ -f "${log_file}.${index}.gz" ]]; then
-                mv -f -- "${log_file}.${index}.gz" "${log_file}.$((index + 1)).gz"
-            fi
-        done
-        gzip -f -- "${log_file}.1"
+    mkdir -p "$allowed_dir"
+    allowed_real=$(cd -P "$allowed_dir" 2>/dev/null && pwd -P) || {
+        log "❌ Could not resolve log directory: $allowed_dir" >&2
+        exit 2
+    }
+    log_dir_raw=$(dirname "$log_file")
+    log_base=$(basename "$log_file")
+    if [[ -z "$log_base" || "$log_base" == "." || "$log_base" == ".." ]]; then
+        log "❌ Refusing unsafe UPDATE_LOG_FILE=$log_file (expected regular file inside $allowed_real)" >&2
+        exit 2
+    fi
+    log_dir_real=$(cd -P "$log_dir_raw" 2>/dev/null && pwd -P) || log_dir_real=""
+    if [[ -z "$log_dir_real" || ( "$log_dir_real" != "$allowed_real" && "$log_dir_real" != "$allowed_real/"* ) ]]; then
+        log "❌ Refusing unsafe UPDATE_LOG_FILE=$log_file (expected regular file inside $allowed_real)" >&2
+        exit 2
+    fi
+    resolved_log="${log_dir_real}/${log_base}"
+    if [[ -L "$resolved_log" || ( -e "$resolved_log" && ! -f "$resolved_log" ) || -L "${resolved_log}.1" || ( -e "${resolved_log}.1" && ! -f "${resolved_log}.1" ) ]]; then
+        log "❌ Refusing unsafe UPDATE_LOG_FILE=$resolved_log (must not be a symlink or special file)" >&2
+        exit 2
     fi
 
-    [[ -f "$log_file" ]] || return 0
-    size=$(wc -c < "$log_file" | tr -d '[:space:]')
+    if [[ -f "${resolved_log}.1" && -e "$resolved_log" ]]; then
+        rm -f -- "${resolved_log}.${keep}.gz"
+        for ((index=keep-1; index>=1; index--)); do
+            if [[ -f "${resolved_log}.${index}.gz" ]]; then
+                mv -f -- "${resolved_log}.${index}.gz" "${resolved_log}.$((index + 1)).gz"
+            fi
+        done
+        gzip -f -- "${resolved_log}.1"
+    fi
+
+    [[ -f "$resolved_log" ]] || return 0
+    size=$(wc -c < "$resolved_log" | tr -d '[:space:]')
     if (( size >= max_bytes )); then
-        mv -f -- "$log_file" "${log_file}.1"
+        mv -f -- "$resolved_log" "${resolved_log}.1"
         log "🗜️  Rotated update.log (${size} bytes); compression queued for next run"
     fi
 }
