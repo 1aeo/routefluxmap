@@ -8,18 +8,61 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./upload-common.sh
 source "$SCRIPT_DIR/upload-common.sh"
 
 # Parse arguments
+ACTION=""
+# shellcheck disable=SC2034
 SOURCE_DIR_ARG=""
 FORCE_BACKUP=false
-case "${1:-}" in
-    --list-backups|--force-backup|--help|-h) ;;
-    *) SOURCE_DIR_ARG="${1:-}" ;;
-esac
+CLI_SKIP_LOCAL_BACKUP=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list-backups)
+            ACTION="list"
+            shift
+            ;;
+        --force-backup)
+            FORCE_BACKUP=true
+            shift
+            ;;
+        --no-local-backup)
+            CLI_SKIP_LOCAL_BACKUP=true
+            shift
+            ;;
+        --help|-h)
+            print_help "$0" "DO Spaces"
+            exit 0
+            ;;
+        --)
+            shift
+            if [[ $# -gt 0 ]]; then
+                SOURCE_DIR_ARG="$1"
+                shift
+            fi
+            break
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            # shellcheck disable=SC2034
+            SOURCE_DIR_ARG="$1"
+            shift
+            ;;
+    esac
+done
 
 setup_common_vars
+trap cleanup_local_backup_staging EXIT
+# shellcheck disable=SC2034
 STORAGE_NAME="DO-Spaces"
+if [[ "$CLI_SKIP_LOCAL_BACKUP" == "true" ]]; then
+    # shellcheck disable=SC2034
+    SKIP_LOCAL_BACKUP=true
+fi
 
 # Override parallelism for DO Spaces (lower to avoid 503 rate limiting)
 TRANSFERS="${DO_RCLONE_TRANSFERS:-32}"
@@ -31,24 +74,23 @@ DO_BUCKET_NAME="${DO_SPACES_BUCKET:?DO_SPACES_BUCKET must be set in config.env}"
 BUCKET="spaces-rfm:${DO_BUCKET_NAME}"
 DO_USE_CDN="${DO_SPACES_CDN:-false}"
 
-LOCAL_BACKUP_MARKER="$LOG_DIR/last-do-local-backup-date"
 DO_BACKUP_MARKER="$LOG_DIR/last-do-backup-date"
 DAILY_DO_BACKUP="${DAILY_DO_BACKUP:-true}"
 
 ensure_spaces_remote() {
     local do_key="${DO_SPACES_KEY:-}"
     local do_secret="${DO_SPACES_SECRET:-}"
-    
+
     if [[ -z "$do_key" ]] || [[ -z "$do_secret" ]]; then
         echo "❌ Error: DO_SPACES_KEY and DO_SPACES_SECRET must be set in config.env"
         exit 1
     fi
-    
+
     ensure_rclone
-    
-    if ! $RCLONE listremotes 2>/dev/null | grep -q "^spaces-rfm:$"; then
+
+    if ! "$RCLONE" listremotes 2>/dev/null | grep -q "^spaces-rfm:$"; then
         log "📦 Configuring rclone 'spaces-rfm' remote..."
-        $RCLONE config create spaces-rfm s3 \
+        "$RCLONE" config create spaces-rfm s3 \
             provider=DigitalOcean \
             access_key_id="$do_key" \
             secret_access_key="$do_secret" \
@@ -60,23 +102,11 @@ ensure_spaces_remote() {
     fi
 }
 
-# Handle arguments
-case "${1:-}" in
-    --list-backups)
-        ensure_spaces_remote
-        list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$DO_BACKUP_MARKER" "DO Spaces"
-        exit 0
-        ;;
-    --force-backup)
-        FORCE_BACKUP=true
-        SOURCE_DIR_ARG="${2:-}"
-        setup_common_vars
-        ;;
-    --help|-h)
-        print_help "$0" "DO Spaces"
-        exit 0
-        ;;
-esac
+if [[ "$ACTION" == "list" ]]; then
+    ensure_spaces_remote
+    list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$DO_BACKUP_MARKER" "DO Spaces"
+    exit 0
+fi
 
 [[ ! -d "$SOURCE_DIR" ]] && { echo "❌ Error: Source directory not found: $SOURCE_DIR"; exit 1; }
 
@@ -95,4 +125,3 @@ create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOC
 create_remote_backup "$BUCKET" "$DO_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_DO_BACKUP" || true
 upload_content "$BUCKET"
 print_sync_summary
-

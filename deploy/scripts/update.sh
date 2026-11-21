@@ -10,7 +10,7 @@
 #   ./update.sh 24 --upload-interval=15  # Custom upload interval
 #
 # Cron (daily):
-#   0 4 * * * /path/to/deploy/scripts/update.sh >> /path/to/deploy/logs/update.log 2>&1
+#   0 */4 * * * /path/to/deploy/scripts/update.sh >> /path/to/deploy/logs/update.log 2>&1
 
 set -euo pipefail
 
@@ -18,7 +18,11 @@ set -euo pipefail
 # Environment Setup (Required for cron which runs with minimal PATH)
 # ============================================================================
 export HOME="${HOME:-/home/tor}"
-export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/bin:$HOME/.nvm/versions/node/$(ls -1 $HOME/.nvm/versions/node 2>/dev/null | tail -1)/bin:/usr/local/node/bin:$PATH"
+NVM_LATEST_NODE_DIR=""
+if [[ -d "$HOME/.nvm/versions/node" ]]; then
+    NVM_LATEST_NODE_DIR=$(find "$HOME/.nvm/versions/node" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1 || true)
+fi
+export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/bin${NVM_LATEST_NODE_DIR:+:$NVM_LATEST_NODE_DIR/bin}:/usr/local/node/bin:$PATH"
 
 # Ensure node is available (try common locations)
 if ! command -v node &>/dev/null; then
@@ -144,6 +148,7 @@ fi
 echo $$ > "$LOCK_FILE"
 
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
+    # shellcheck source=/dev/null
     source "$DEPLOY_DIR/config.env"
 else
     echo "Error: config.env not found in $DEPLOY_DIR"
@@ -162,6 +167,47 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# Safe 2-step rotation compatible with cron `>> update.log 2>&1`:
+# On the run that sees >= max_bytes, rename update.log -> update.log.1 (leaving
+# the current cron stdout fd intact on .1). On the next cron run, once cron has
+# created a fresh update.log inode, shift old .gz archives and compress .1.
+rotate_update_log() {
+    local log_file="${UPDATE_LOG_FILE:-$DEPLOY_DIR/logs/update.log}"
+    local max_bytes="${UPDATE_LOG_MAX_BYTES:-33554432}"
+    local keep="${UPDATE_LOG_ARCHIVES:-3}"
+    local allowed_dir="$DEPLOY_DIR/logs"
+    local index size
+
+    if [[ ! "$max_bytes" =~ ^[1-9][0-9]*$ ]] || [[ ! "$keep" =~ ^[1-9][0-9]*$ ]]; then
+        log "❌ Invalid log rotation setting (UPDATE_LOG_MAX_BYTES=$max_bytes, UPDATE_LOG_ARCHIVES=$keep)" >&2
+        exit 2
+    fi
+
+    if [[ "$log_file" != "$allowed_dir/"* || "$log_file" == "$allowed_dir/" ]]; then
+        log "❌ Refusing unsafe UPDATE_LOG_FILE=$log_file (expected file inside $allowed_dir)" >&2
+        exit 2
+    fi
+
+    if [[ -f "${log_file}.1" && -e "$log_file" ]]; then
+        rm -f -- "${log_file}.${keep}.gz"
+        for ((index=keep-1; index>=1; index--)); do
+            if [[ -f "${log_file}.${index}.gz" ]]; then
+                mv -f -- "${log_file}.${index}.gz" "${log_file}.$((index + 1)).gz"
+            fi
+        done
+        gzip -f -- "${log_file}.1"
+    fi
+
+    [[ -f "$log_file" ]] || return 0
+    size=$(wc -c < "$log_file" | tr -d '[:space:]')
+    if (( size >= max_bytes )); then
+        mv -f -- "$log_file" "${log_file}.1"
+        log "🗜️  Rotated update.log (${size} bytes); compression queued for next run"
+    fi
+}
+
+rotate_update_log
+
 # Get count of dates in index.json
 get_date_count() {
     if [[ -f "$INDEX_FILE" ]]; then
@@ -173,43 +219,56 @@ get_date_count() {
 }
 
 # Run storage uploads (R2 and DO in parallel)
+# When both R2 and DO are enabled, R2 takes the single daily local backup while
+# DO skips duplicate local backup download via --no-local-backup.
 run_uploads() {
     local label="$1"
-    
+
     if [[ "$R2_ENABLED" != "true" ]] && [[ "$DO_ENABLED" != "true" ]]; then
         return 0
     fi
-    
+
     log "🚀 $label..."
-    local UPLOAD_START=$(date +%s)
-    local R2_PID="" DO_PID=""
-    
+    local UPLOAD_START R2_PID="" DO_PID=""
+    UPLOAD_START=$(date +%s)
+
     if [[ "$R2_ENABLED" == "true" ]]; then
         "$SCRIPT_DIR/upload-r2.sh" "$OUTPUT_DIR" &
         R2_PID=$!
     fi
-    
+
     if [[ "$DO_ENABLED" == "true" ]]; then
-        "$SCRIPT_DIR/upload-do.sh" "$OUTPUT_DIR" &
+        if [[ "$R2_ENABLED" == "true" ]]; then
+            "$SCRIPT_DIR/upload-do.sh" --no-local-backup "$OUTPUT_DIR" &
+        else
+            "$SCRIPT_DIR/upload-do.sh" "$OUTPUT_DIR" &
+        fi
         DO_PID=$!
     fi
-    
+
     # Wait for uploads
-    local SUCCESS=false
+    local SUCCESS=false r2_exit=0 do_exit=0
     if [[ -n "$R2_PID" ]]; then
-        if wait "$R2_PID" 2>/dev/null; then
+        if wait "$R2_PID"; then
             SUCCESS=true
+        else
+            r2_exit=$?
+            log "   ⚠ R2 upload failed (exit $r2_exit)"
         fi
     fi
     if [[ -n "$DO_PID" ]]; then
-        if wait "$DO_PID" 2>/dev/null; then
+        if wait "$DO_PID"; then
             SUCCESS=true
+        else
+            do_exit=$?
+            log "   ⚠ DO Spaces upload failed (exit $do_exit)"
         fi
     fi
-    
-    local DURATION=$(($(date +%s) - UPLOAD_START))
-    local TIME=$(printf '%dm%02ds' $((DURATION/60)) $((DURATION%60)))
-    
+
+    local DURATION TIME
+    DURATION=$(($(date +%s) - UPLOAD_START))
+    TIME=$(printf '%dm%02ds' $((DURATION/60)) $((DURATION%60)))
+
     if [[ "$SUCCESS" == "true" ]]; then
         log "   ✓ Upload completed ($TIME)"
     else
@@ -249,9 +308,9 @@ log "📦 Using Node.js $(node --version)"
 
 # Step 2: Build fetch command
 cd "$PROJECT_DIR"
-FETCH_OPTS=""
-[[ -n "$DATE_RANGE" ]] && FETCH_OPTS="$FETCH_OPTS $DATE_RANGE"
-[[ -n "$PARALLEL" ]] && FETCH_OPTS="$FETCH_OPTS --parallel=$PARALLEL"
+declare -a FETCH_ARGS=()
+[[ -n "$DATE_RANGE" ]] && FETCH_ARGS+=("$DATE_RANGE")
+[[ -n "$PARALLEL" ]] && FETCH_ARGS+=("--parallel=$PARALLEL")
 
 # ============================================================================
 # Step 3: Fetch with Incremental Uploads
@@ -259,13 +318,12 @@ FETCH_OPTS=""
 
 # For year mode, run parallel processes for each quarter (4 concurrent Node.js processes)
 if [[ "$RUN_MODE" == "year" ]]; then
-    YEAR="20${DATE_RANGE}"
     log "🚀 PARALLEL YEAR MODE: Running 4 quarters concurrently"
     log ""
-    
+
     INITIAL_COUNT=$(get_date_count)
     LAST_UPLOAD_COUNT=$INITIAL_COUNT
-    
+
     # Start Q1-Q4 as parallel processes
     declare -a QUARTER_PIDS=()
     for Q in 1 2 3 4; do
@@ -275,12 +333,12 @@ if [[ "$RUN_MODE" == "year" ]]; then
             3) MONTHS="07/01/${DATE_RANGE}-09/30/${DATE_RANGE}" ;;
             4) MONTHS="10/01/${DATE_RANGE}-12/31/${DATE_RANGE}" ;;
         esac
-        
+
         log "   Starting Q${Q} ($MONTHS)..."
         npx tsx scripts/fetch-all-data.ts "$MONTHS" --parallel=8 &
         QUARTER_PIDS+=($!)
     done
-    
+
     log ""
     log "   Q1 PID: ${QUARTER_PIDS[0]}"
     log "   Q2 PID: ${QUARTER_PIDS[1]}"
@@ -289,7 +347,7 @@ if [[ "$RUN_MODE" == "year" ]]; then
     log ""
     log "   Monitoring progress (upload every $UPLOAD_INTERVAL days)..."
     log ""
-    
+
     # Monitor all quarters, upload periodically
     while true; do
         # Check if any quarter is still running
@@ -299,23 +357,23 @@ if [[ "$RUN_MODE" == "year" ]]; then
                 RUNNING=$((RUNNING + 1))
             fi
         done
-        
+
         if [[ "$RUNNING" -eq 0 ]]; then
             break
         fi
-        
+
         sleep 10
-        
+
         CURRENT_COUNT=$(get_date_count)
         NEW_DAYS=$((CURRENT_COUNT - LAST_UPLOAD_COUNT))
-        
+
         if [[ "$NEW_DAYS" -ge "$UPLOAD_INTERVAL" ]]; then
             log "📊 Progress: $CURRENT_COUNT dates (+$NEW_DAYS) - $RUNNING quarters still running"
             run_uploads "Incremental upload"
             LAST_UPLOAD_COUNT=$CURRENT_COUNT
         fi
     done
-    
+
     # Check exit status of all quarters
     FAILED=0
     for i in 0 1 2 3; do
@@ -328,15 +386,15 @@ if [[ "$RUN_MODE" == "year" ]]; then
             log "   ✓ Q$((i+1)) completed"
         fi
     done
-    
+
     if [[ "$FAILED" -gt 0 ]]; then
         log "❌ $FAILED quarter(s) failed"
     else
         log "✅ All quarters completed successfully"
     fi
-    
+
     run_backfill
-    
+
     # Final upload
     FINAL_COUNT=$(get_date_count)
     TOTAL_NEW=$((FINAL_COUNT - INITIAL_COUNT))
@@ -346,65 +404,73 @@ if [[ "$RUN_MODE" == "year" ]]; then
 elif [[ "$UPLOAD_INTERVAL" -eq 0 ]]; then
     # Simple mode: fetch, then upload once at end
     log "📡 Fetching data..."
-    
-    if npx tsx scripts/fetch-all-data.ts $FETCH_OPTS; then
+
+    if npx tsx scripts/fetch-all-data.ts ${FETCH_ARGS[@]+"${FETCH_ARGS[@]}"}; then
         log "✅ Data fetch completed"
     else
         log "❌ Data fetch failed"
         exit 1
     fi
-    
+
     run_backfill
     run_uploads "Uploading to storage"
 else
     # Incremental mode: fetch in background, upload periodically
     log "📡 Starting data fetch (background)..."
-    
+
     INITIAL_COUNT=$(get_date_count)
     LAST_UPLOAD_COUNT=$INITIAL_COUNT
-    
+
     # Start fetch in background
-    npx tsx scripts/fetch-all-data.ts $FETCH_OPTS &
+    npx tsx scripts/fetch-all-data.ts ${FETCH_ARGS[@]+"${FETCH_ARGS[@]}"} &
     FETCH_PID=$!
-    
+
     log "   Fetch PID: $FETCH_PID"
     log "   Initial date count: $INITIAL_COUNT"
     log "   Will upload every $UPLOAD_INTERVAL new days"
     log ""
-    
+
     # Monitor and upload periodically
     while kill -0 "$FETCH_PID" 2>/dev/null; do
         sleep 10  # Check every 10 seconds
-        
+
         CURRENT_COUNT=$(get_date_count)
         NEW_DAYS=$((CURRENT_COUNT - LAST_UPLOAD_COUNT))
-        
+
         if [[ "$NEW_DAYS" -ge "$UPLOAD_INTERVAL" ]]; then
             log "📊 Progress: $CURRENT_COUNT dates (+$NEW_DAYS since last upload)"
             run_uploads "Incremental upload"
             LAST_UPLOAD_COUNT=$CURRENT_COUNT
         fi
     done
-    
+
     # Check fetch exit status
     FETCH_EXIT=0
     wait "$FETCH_PID" || FETCH_EXIT=$?
     FETCH_PID=""
-    
+
     if [[ "$FETCH_EXIT" -eq 0 ]]; then
         log "✅ Data fetch completed"
     else
         log "❌ Data fetch failed (exit $FETCH_EXIT)"
         exit 1
     fi
-    
+
     run_backfill
-    
+
     # Final upload (catches any remaining files)
     FINAL_COUNT=$(get_date_count)
     TOTAL_NEW=$((FINAL_COUNT - INITIAL_COUNT))
     log "📊 Final: $FINAL_COUNT dates ($TOTAL_NEW new)"
     run_uploads "Final upload"
+fi
+
+# Enforce current-month backup retention daily (non-fatal)
+if [[ -x "$SCRIPT_DIR/backup-maintenance.sh" ]]; then
+    log "🧹 Enforcing daily backup retention..."
+    if ! "$SCRIPT_DIR/backup-maintenance.sh" --prune-only >> "$DEPLOY_DIR/logs/backup-maintenance.log" 2>&1; then
+        log "⚠️ Daily backup pruning had issues (non-fatal)"
+    fi
 fi
 
 log ""

@@ -3,7 +3,7 @@
 # Usage: ./cron-manage.sh {install|verify|backup|show|migrate}
 set -e
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; DIM='\033[2m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log() { echo -e "${BLUE}[cron]${NC} $1"; }
 ok() { echo -e "${GREEN}✓${NC} $1"; }
 warn() { echo -e "${YELLOW}⚠${NC} $1"; }
@@ -19,13 +19,17 @@ mkdir -p "$BACKUP_DIR" "$DEPLOY_DIR/logs"
 
 gen_content() {
     export DEPLOY_DIR CRON_USER
-    [[ -f "$DEPLOY_DIR/configs/routefluxmap.cron.d" ]] && \
-        envsubst '${DEPLOY_DIR} ${CRON_USER}' < "$DEPLOY_DIR/configs/routefluxmap.cron.d" && return
+    if [[ -f "$DEPLOY_DIR/configs/routefluxmap.cron.d" ]]; then
+        # shellcheck disable=SC2016
+        envsubst '${DEPLOY_DIR} ${CRON_USER}' < "$DEPLOY_DIR/configs/routefluxmap.cron.d"
+        return
+    fi
     cat << EOF
 SHELL=/bin/bash
 PATH=/usr/local/bin:/usr/bin:/bin
 MAILTO=""
 0 */4 * * * ${CRON_USER} ${DEPLOY_DIR}/scripts/update.sh >> ${DEPLOY_DIR}/logs/update.log 2>&1
+30 6 * * * ${CRON_USER} flock -n /tmp/routefluxmap-backup-maintenance.lock ${DEPLOY_DIR}/scripts/backup-maintenance.sh >> ${DEPLOY_DIR}/logs/backup-maintenance.log 2>&1
 EOF
 }
 
@@ -40,28 +44,43 @@ cmd_install() {
     echo ""
     cat "$CRON_D_FILE"
     echo ""
-    ok "Cron job will run every 4 hours at :00"
+    ok "Cron jobs installed (update every 4h, backup maintenance daily at 06:30)"
 }
 
 cmd_verify() {
     log "Verifying cron jobs..."; echo ""
     local found_crond=false found_user=false exit_code=0
-    
+
     # Check /etc/cron.d/
     if [[ -f "$CRON_D_FILE" ]] && grep -q "update.sh" "$CRON_D_FILE" 2>/dev/null; then
         ok "/etc/cron.d/routefluxmap: update job ✓"
         found_crond=true
+        if grep -q "backup-maintenance.sh" "$CRON_D_FILE" 2>/dev/null; then
+            if grep -Eq '^[[:space:]]*0[[:space:]]+3[[:space:]]+1[[:space:]]+\*[[:space:]]+\*.*backup-maintenance\.sh' "$CRON_D_FILE"; then
+                warn "/etc/cron.d/routefluxmap: backup-maintenance is still monthly (0 3 1 * *); run 'sudo $0 install' to switch to daily"
+                exit_code=1
+            else
+                ok "/etc/cron.d/routefluxmap: backup-maintenance job (daily) ✓"
+            fi
+        else
+            warn "/etc/cron.d/routefluxmap: backup-maintenance job missing (run 'sudo $0 install')"
+            exit_code=1
+        fi
     else
         warn "/etc/cron.d/routefluxmap: not found"
     fi
-    
+
     # Check user crontab
     local user_cron; user_cron=$(crontab -l 2>/dev/null || true)
     if echo "$user_cron" | grep -q "routefluxmap.*update"; then
-        [[ "$found_crond" == "true" ]] && warn "User crontab: DUPLICATE (run migrate)" || ok "User crontab: update ✓"
+        if [[ "$found_crond" == "true" ]]; then
+            warn "User crontab: DUPLICATE (run migrate)"
+        else
+            ok "User crontab: update ✓"
+        fi
         found_user=true
     fi
-    
+
     # Check cron service
     echo ""
     if systemctl is-active --quiet cron 2>/dev/null || systemctl is-active --quiet crond 2>/dev/null || pgrep -x cron &>/dev/null; then
@@ -70,13 +89,13 @@ cmd_verify() {
         err "Cron service: NOT running"
         exit_code=1
     fi
-    
+
     # Show recent activity
     if [[ -f "$LOG_FILE" ]]; then
         local last_run; last_run=$(grep -E '^\[' "$LOG_FILE" 2>/dev/null | tail -1 | grep -oE '\[[0-9-]+ [0-9:]+\]' | tr -d '[]' || echo "")
         [[ -n "$last_run" ]] && echo -e "Last run: ${GREEN}$last_run${NC}"
     fi
-    
+
     echo ""
     if [[ "$found_crond" == "true" ]]; then
         ok "Status: Cron jobs in /etc/cron.d/ (protected)"
@@ -88,18 +107,24 @@ cmd_verify() {
         err "NO CRON JOBS FOUND! Run 'sudo $0 install'"
         exit_code=1
     fi
-    
+
     return $exit_code
 }
 
 cmd_backup() {
-    local f="$BACKUP_DIR/crontab-$(date +%Y%m%d_%H%M%S).bak"
-    crontab -l > "$f" 2>/dev/null && [[ -s "$f" ]] && ok "Backed up: $f" || { rm -f "$f"; warn "Nothing to backup"; }
+    local f
+    f="$BACKUP_DIR/crontab-$(date +%Y%m%d_%H%M%S).bak"
+    if crontab -l > "$f" 2>/dev/null && [[ -s "$f" ]]; then
+        ok "Backed up: $f"
+    else
+        rm -f "$f"
+        warn "Nothing to backup"
+    fi
 }
 
 cmd_show() {
     log "Current configuration:"; echo ""
-    echo "=== /etc/cron.d/routefluxmap ===" 
+    echo "=== /etc/cron.d/routefluxmap ==="
     [[ -f "$CRON_D_FILE" ]] && cat "$CRON_D_FILE" || echo "(not found)"
     echo ""
     echo "=== User crontab (routefluxmap entries) ==="
@@ -112,7 +137,8 @@ cmd_show() {
         echo "(no log file yet)"
     fi
     echo ""
-    echo "=== Backups ===" 
+    echo "=== Backups ==="
+    # shellcheck disable=SC2012
     ls -1 "$BACKUP_DIR"/*.bak 2>/dev/null | tail -5 || echo "(none)"
 }
 
@@ -124,10 +150,15 @@ cmd_migrate() {
     local cnt; cnt=$(echo "$cur" | grep -cE "routefluxmap" || echo 0)
     [[ "$cnt" -eq 0 ]] && { ok "No routefluxmap entries to migrate"; return 0; }
     # Backup then remove
-    local f="$BACKUP_DIR/crontab-$(date +%Y%m%d_%H%M%S).bak"
+    local f new
+    f="$BACKUP_DIR/crontab-$(date +%Y%m%d_%H%M%S).bak"
     echo "$cur" > "$f"; ok "Backed up: $f"
-    local new; new=$(echo "$cur" | grep -vE "routefluxmap" || true)
-    [[ -n "$new" ]] && echo "$new" | crontab - || crontab -r 2>/dev/null
+    new=$(echo "$cur" | grep -vE "routefluxmap" || true)
+    if [[ -n "$new" ]]; then
+        echo "$new" | crontab -
+    else
+        crontab -r 2>/dev/null || true
+    fi
     ok "Removed $cnt entries from user crontab"
 }
 
