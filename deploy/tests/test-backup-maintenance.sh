@@ -91,6 +91,9 @@ cat > "$MOCK_FLOCK_BIN/flock" <<EOF
 if [[ "\${MOCK_FLOCK_CONTEND:-0}" == "1" ]]; then
     exit 1
 fi
+if [[ -n "\${MOCK_FLOCK_CONTEND_FD:-}" && "\${2:-}" == "\$MOCK_FLOCK_CONTEND_FD" ]]; then
+    exit 1
+fi
 if [[ -n "$REAL_FLOCK" ]]; then
     exec "$REAL_FLOCK" "\$@"
 fi
@@ -207,10 +210,14 @@ if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$
     fail "Test 2b update.sh failed"
 fi
 
+do_local_line=$(grep -nE 'sync spaces-rfm:test-do-bucket .*/\.tmp-backup-' "$CALLS2B" | head -n 1 | cut -d: -f1)
+do_live_line=$(grep -nE "sync $PROJ2B/public/data spaces-rfm:test-do-bucket " "$CALLS2B" | head -n 1 | cut -d: -f1)
 do_local_calls=$(grep -c 'sync spaces-rfm:test-do-bucket .*/.tmp-backup-' "$CALLS2B" || true)
 [[ "$do_local_calls" == "1" ]] || fail "expected DO fallback local backup when R2 failed pre-checks, got $do_local_calls"
+[[ -n "$do_local_line" && -n "$do_live_line" && "$do_local_line" -lt "$do_live_line" ]] || \
+    fail "DO fallback backup ($do_local_line) did not run BEFORE DO live upload ($do_live_line)"
 [[ -f "$PROJ2B/deploy/logs/last-local-backup-date" ]] || fail "DO fallback did not write shared local backup marker"
-pass "update.sh falls back to DO local backup when R2 fails before creating local backup"
+pass "update.sh falls back to DO local backup before live sync when R2 fails"
 
 # ---------------------------------------------------------------------------
 # Test 3: Shared marker, flock contention, and post-lock stderr preservation
@@ -324,11 +331,13 @@ for d in 01 02 03 04; do
     printf 'cur %s\n' "$d" > "$PROJ5/backups/backup-${CUR_YM}-${d}_000100/data.json"
 done
 
-# 5a: Lock-held backup-maintenance.sh skips removing stale .tmp-backup-* while lock is held
+# 5a: Contend ONLY local backup lock (FD 7); maintenance runs (takes FD 8) and skips stale .tmp-backup-* cleanup
 touch "$PROJ5/deploy/logs/.local-backup.lock"
-if ! PATH="$MOCK_FLOCK_BIN:$PATH" MOCK_FLOCK_CONTEND=1 "$PROJ5/deploy/scripts/backup-maintenance.sh" --prune-only > "$LAST_RUN_LOG" 2>&1; then
+if ! PATH="$MOCK_FLOCK_BIN:$PATH" MOCK_FLOCK_CONTEND_FD=7 "$PROJ5/deploy/scripts/backup-maintenance.sh" --prune-only > "$LAST_RUN_LOG" 2>&1; then
     fail "backup-maintenance.sh --prune-only failed under lock contention"
 fi
+grep -Fq 'Skipping stale temp backup cleanup (local backup lock is held)' "$LAST_RUN_LOG" || \
+    fail "lock-held skip message missing"
 [[ -d "$PROJ5/backups/.tmp-backup-stale" ]] || fail "stale .tmp-backup was removed while lock held"
 
 # 5a-2: --prune-only leaves completed-month daily backups and corrupt archive untouched
@@ -383,6 +392,17 @@ if PATH="$FAIL_TAR_BIN:$MOCK_FLOCK_BIN:$PATH" "$PROJ5/deploy/scripts/backup-main
     fail "backup-maintenance.sh returned 0 when tar failed"
 fi
 [[ -d "$PROJ5/backups/backup-2025-11-30_000100" ]] || fail "failed compression deleted source backup"
+
+# 5d-2: Fallback --local-backup-only returns non-zero when rclone fails, and Test 3 lock file is mode 600
+if PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS4" MOCK_FAIL_LOCAL_BACKUP=1 \
+    "$PROJ3/deploy/scripts/upload-do.sh" --local-backup-only "$PROJ3/public/data" > "$LAST_RUN_LOG" 2>&1; then
+    fail "upload-do.sh --local-backup-only returned 0 despite local backup failure"
+fi
+lock_mode=$(stat -c '%a' "$PROJ3/deploy/logs/.local-backup.lock" 2>/dev/null || stat -f '%Lp' "$PROJ3/deploy/logs/.local-backup.lock")
+[[ "$lock_mode" == "600" ]] || fail "expected .local-backup.lock mode 600, got $lock_mode"
+if grep -qE '/tmp/.*routefluxmap.*lock' "$PROJ1/deploy/configs/routefluxmap.cron.d" "$PROJ1/deploy/scripts/cron-manage.sh"; then
+    fail "predictable /tmp lock reference still present in cron config or cron-manage.sh"
+fi
 
 # 5e: Invalid KEEP_BACKUPS fails closed
 for bad_keep in 0 -3 abc; do
@@ -449,4 +469,10 @@ bash -c '
     CRON_D_FILE="$1"
     grep -Eq "^[[:space:]]*(([0-9*,/-]+[[:space:]]+){2}\\*[[:space:]]+\\*[[:space:]]+\\*|@daily)[[:space:]]+.*backup-maintenance\\.sh" "$CRON_D_FILE"
 ' _ "${CRON_D_MOCK}.active" || fail "active 30 6 * * * line did not match daily check"
+printf '  # 0 */4 * * * tor /opt/update.sh\n' > "${CRON_D_MOCK}.indented"
+if bash -c '
+    grep -Eq "^[[:space:]]*[^#[:space:]].*update\\.sh" "$1"
+' _ "${CRON_D_MOCK}.indented"; then
+    fail "indented commented update.sh line matched active check"
+fi
 pass "cron-manage verification pattern ignores comments and accepts daily schedule"

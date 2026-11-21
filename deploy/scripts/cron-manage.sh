@@ -29,7 +29,7 @@ SHELL=/bin/bash
 PATH=/usr/local/bin:/usr/bin:/bin
 MAILTO=""
 0 */4 * * * ${CRON_USER} ${DEPLOY_DIR}/scripts/update.sh >> ${DEPLOY_DIR}/logs/update.log 2>&1
-30 6 * * * ${CRON_USER} flock -n /tmp/routefluxmap-backup-maintenance.lock ${DEPLOY_DIR}/scripts/backup-maintenance.sh >> ${DEPLOY_DIR}/logs/backup-maintenance.log 2>&1
+30 6 * * * ${CRON_USER} ${DEPLOY_DIR}/scripts/backup-maintenance.sh >> ${DEPLOY_DIR}/logs/backup-maintenance.log 2>&1
 EOF
 }
 
@@ -59,7 +59,7 @@ cmd_verify() {
     local found_crond=false found_user=false exit_code=0
 
     # Check /etc/cron.d/ (ignoring comments)
-    if [[ -f "$CRON_D_FILE" ]] && grep -Eq '^[[:space:]]*[^#].*update\.sh' "$CRON_D_FILE" 2>/dev/null; then
+    if [[ -f "$CRON_D_FILE" ]] && grep -Eq '^[[:space:]]*[^#[:space:]].*update\.sh' "$CRON_D_FILE" 2>/dev/null; then
         ok "/etc/cron.d/routefluxmap: update job ✓"
         found_crond=true
         if grep -Eq '^[[:space:]]*0[[:space:]]+3[[:space:]]+1[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*backup-maintenance\.sh' "$CRON_D_FILE" 2>/dev/null; then

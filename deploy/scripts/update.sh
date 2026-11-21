@@ -221,9 +221,8 @@ get_date_count() {
 }
 
 # Run storage uploads (R2 and DO in parallel)
-# When both R2 and DO are enabled, R2 takes the single daily local backup while
-# DO skips duplicate local backup download via --no-local-backup; if R2 does not
-# complete today's local backup, healthy DO falls back to --local-backup-only.
+# When both R2 and DO are enabled, R2 performs the primary daily local backup
+# and signals its result before DO runs local backup / overwrites live content.
 run_uploads() {
     local label="$1"
 
@@ -232,20 +231,31 @@ run_uploads() {
     fi
 
     log "🚀 $label..."
-    local UPLOAD_START R2_PID="" DO_PID="" r2_result_file="" r2_backup_result=""
+    local UPLOAD_START R2_PID="" DO_PID="" r2_result_file=""
     UPLOAD_START=$(date +%s)
 
     if [[ "$R2_ENABLED" == "true" ]]; then
         if [[ "$DO_ENABLED" == "true" ]]; then
             r2_result_file=$(mktemp "$DEPLOY_DIR/logs/.r2-local-backup.XXXXXX" 2>/dev/null || echo "")
         fi
-        ROUTEFLUXMAP_LOCAL_BACKUP_RESULT_FILE="$r2_result_file" "$SCRIPT_DIR/upload-r2.sh" "$OUTPUT_DIR" &
+        (
+            r2_rc=0
+            ROUTEFLUXMAP_LOCAL_BACKUP_RESULT_FILE="$r2_result_file" "$SCRIPT_DIR/upload-r2.sh" "$OUTPUT_DIR" || r2_rc=$?
+            if [[ -n "$r2_result_file" && ! -s "$r2_result_file" ]]; then
+                printf 'failed\n' > "${r2_result_file}.tmp.$$" 2>/dev/null &&
+                    mv -f -- "${r2_result_file}.tmp.$$" "$r2_result_file" 2>/dev/null ||
+                    rm -f -- "${r2_result_file}.tmp.$$" 2>/dev/null || true
+            fi
+            exit "$r2_rc"
+        ) &
         R2_PID=$!
     fi
 
     if [[ "$DO_ENABLED" == "true" ]]; then
-        if [[ "$R2_ENABLED" == "true" ]]; then
-            "$SCRIPT_DIR/upload-do.sh" --no-local-backup "$OUTPUT_DIR" &
+        if [[ "$R2_ENABLED" == "true" && -n "$r2_result_file" ]]; then
+            ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$r2_result_file" "$SCRIPT_DIR/upload-do.sh" "$OUTPUT_DIR" &
+        elif [[ "$R2_ENABLED" == "true" ]]; then
+            "$SCRIPT_DIR/upload-do.sh" "$OUTPUT_DIR" &
         else
             "$SCRIPT_DIR/upload-do.sh" "$OUTPUT_DIR" &
         fi
@@ -271,16 +281,6 @@ run_uploads() {
         fi
     fi
 
-    if [[ "$R2_ENABLED" == "true" && "$DO_ENABLED" == "true" && "$do_exit" -eq 0 ]]; then
-        if [[ -n "$r2_result_file" && -f "$r2_result_file" ]]; then
-            r2_backup_result=$(cat "$r2_result_file" 2>/dev/null || true)
-        fi
-        if [[ "$r2_exit" -ne 0 || "$r2_backup_result" == "failed" || "$r2_backup_result" == "skipped" ]]; then
-            log "   🔁 R2 did not complete today's local backup (${r2_backup_result:-exit $r2_exit}); falling back to DO..."
-            "$SCRIPT_DIR/upload-do.sh" --local-backup-only "$OUTPUT_DIR" || \
-                log "   ⚠ DO fallback local backup had issues (non-fatal)"
-        fi
-    fi
     if [[ -n "$r2_result_file" ]]; then
         rm -f -- "$r2_result_file"
     fi

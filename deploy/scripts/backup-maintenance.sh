@@ -37,8 +37,9 @@ fi
 BACKUP_DIR="${BACKUP_DIR:-$HOME/routefluxmap-backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-7}"
 LOG_DIR="${LOG_DIR:-$DEPLOY_DIR/logs}"
-LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$LOG_DIR/.local-backup.lock}"
+LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$DEPLOY_DIR/logs/.local-backup.lock}"
 mkdir -p "$LOG_DIR"
+chmod 700 "$LOG_DIR"
 
 DRY_RUN=false
 PRUNE_ONLY=false
@@ -133,7 +134,11 @@ fi
 
 if [[ "$DRY_RUN" != "true" ]] && command -v flock >/dev/null 2>&1; then
     LOCK_FILE="$LOG_DIR/.backup-maintenance.lock"
+    _old_umask=$(umask)
+    umask 077
     exec 8>"$LOCK_FILE"
+    umask "$_old_umask"
+    chmod 600 "$LOCK_FILE"
     _LOCK_OPEN=true
     if ! flock -n 8; then
         exec 8>&-

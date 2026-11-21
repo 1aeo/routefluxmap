@@ -127,9 +127,26 @@ else
 fi
 
 if [[ "$LOCAL_BACKUP_ONLY" == "true" ]]; then
-    create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || true
-    print_sync_summary
-    exit 0
+    fallback_rc=0
+    create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || fallback_rc=$?
+    case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
+        created|already_done|skipped_disabled)
+            print_sync_summary
+            exit 0
+            ;;
+        *)
+            exit "${fallback_rc:-1}"
+            ;;
+    esac
+fi
+
+if [[ "${SKIP_LOCAL_BACKUP:-false}" != "true" ]] &&
+    backup_needed "$LOCAL_BACKUP_MARKER" "$DAILY_LOCAL_BACKUP" "$FORCE_BACKUP" &&
+    [[ -n "${ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE:-}" ]]; then
+    if wait_for_primary_local_backup_result "$ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE" "${ROUTEFLUXMAP_LOCAL_BACKUP_WAIT_TIMEOUT:-7200}"; then
+        # shellcheck disable=SC2034
+        SKIP_LOCAL_BACKUP=true
+    fi
 fi
 
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || true

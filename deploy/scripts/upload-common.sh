@@ -48,6 +48,7 @@ setup_common_vars() {
 
     LOG_DIR="$DEPLOY_DIR/logs"
     mkdir -p "$LOG_DIR"
+    chmod 700 "$LOG_DIR"
 
     LOCAL_BACKUP_MARKER="${LOCAL_BACKUP_MARKER:-$LOG_DIR/last-local-backup-date}"
     LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$LOG_DIR/.local-backup.lock}"
@@ -110,6 +111,35 @@ backup_needed() {
     return 0
 }
 
+wait_for_primary_local_backup_result() {
+    local result_file="${1:-}"
+    local max_wait="${2:-7200}"
+    [[ -n "$result_file" ]] || return 1
+    [[ "$max_wait" =~ ^[1-9][0-9]*$ ]] || max_wait=7200
+
+    local max_iters=$((max_wait * 5))
+    local iter=0 result=""
+    while (( iter < max_iters )); do
+        if [[ -s "$result_file" ]]; then
+            result=$(cat "$result_file" 2>/dev/null || true)
+            case "$result" in
+                created|already_done)
+                    log "⏭️  Skipping local backup (primary storage result: $result)"
+                    return 0
+                    ;;
+                failed|skipped)
+                    log "🔁 Primary storage did not create today's local backup ($result); falling back to this backend"
+                    return 1
+                    ;;
+            esac
+        fi
+        sleep 0.2
+        iter=$((iter + 1))
+    done
+    log "⚠️  Timed out waiting ${max_wait}s for primary local backup result; falling back"
+    return 1
+}
+
 _release_local_backup_lock() {
     if [[ "${_LOCAL_BACKUP_LOCK_OPEN:-false}" == "true" ]]; then
         exec 7>&-
@@ -142,8 +172,17 @@ create_local_backup() {
     fi
 
     if command -v flock >/dev/null 2>&1; then
-        mkdir -p "$(dirname "$LOCAL_BACKUP_LOCK_FILE")"
+        local lock_dir _old_umask
+        lock_dir=$(dirname "$LOCAL_BACKUP_LOCK_FILE")
+        mkdir -p "$lock_dir"
+        if [[ "$lock_dir" == "$LOG_DIR" ]]; then
+            chmod 700 "$lock_dir"
+        fi
+        _old_umask=$(umask)
+        umask 077
         exec 7>"$LOCAL_BACKUP_LOCK_FILE"
+        umask "$_old_umask"
+        chmod 600 "$LOCAL_BACKUP_LOCK_FILE"
         _LOCAL_BACKUP_LOCK_OPEN=true
         if ! flock -n 7; then
             _release_local_backup_lock
