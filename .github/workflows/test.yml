@@ -29,10 +29,28 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Check deploy scripts and backup maintenance tests
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          for script in deploy/scripts/*.sh deploy/tests/*.sh; do
+            bash -n "$script"
+          done
+          shellcheck -x -e SC1091 \
+            deploy/scripts/backup-maintenance.sh \
+            deploy/scripts/cron-manage.sh \
+            deploy/scripts/update.sh \
+            deploy/scripts/upload-common.sh \
+            deploy/scripts/upload-do.sh \
+            deploy/scripts/upload-r2.sh \
+            deploy/tests/test-backup-maintenance.sh
+          bash deploy/tests/test-backup-maintenance.sh
+
       - name: Upload coverage (optional)
         if: success()
         uses: codecov/codecov-action@v4
         with:
           fail_ci_if_error: false
         continue-on-error: true
-

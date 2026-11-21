@@ -8,18 +8,66 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./upload-common.sh
 source "$SCRIPT_DIR/upload-common.sh"
 
 # Parse arguments
+ACTION=""
+# shellcheck disable=SC2034
 SOURCE_DIR_ARG=""
 FORCE_BACKUP=false
-case "${1:-}" in
-    --list-backups|--force-backup|--help|-h) ;;
-    *) SOURCE_DIR_ARG="${1:-}" ;;
-esac
+CLI_SKIP_LOCAL_BACKUP=false
+LOCAL_BACKUP_ONLY=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list-backups)
+            ACTION="list"
+            shift
+            ;;
+        --force-backup)
+            FORCE_BACKUP=true
+            shift
+            ;;
+        --no-local-backup)
+            CLI_SKIP_LOCAL_BACKUP=true
+            shift
+            ;;
+        --local-backup-only)
+            LOCAL_BACKUP_ONLY=true
+            shift
+            ;;
+        --help|-h)
+            print_help "$0" "DO Spaces"
+            exit 0
+            ;;
+        --)
+            shift
+            if [[ $# -gt 0 ]]; then
+                SOURCE_DIR_ARG="$1"
+                shift
+            fi
+            break
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            # shellcheck disable=SC2034
+            SOURCE_DIR_ARG="$1"
+            shift
+            ;;
+    esac
+done
 
 setup_common_vars
+trap cleanup_local_backup_staging EXIT
+# shellcheck disable=SC2034
 STORAGE_NAME="DO-Spaces"
+if [[ "$CLI_SKIP_LOCAL_BACKUP" == "true" ]]; then
+    # shellcheck disable=SC2034
+    SKIP_LOCAL_BACKUP=true
+fi
 
 # Override parallelism for DO Spaces (lower to avoid 503 rate limiting)
 TRANSFERS="${DO_RCLONE_TRANSFERS:-32}"
@@ -31,24 +79,23 @@ DO_BUCKET_NAME="${DO_SPACES_BUCKET:?DO_SPACES_BUCKET must be set in config.env}"
 BUCKET="spaces-rfm:${DO_BUCKET_NAME}"
 DO_USE_CDN="${DO_SPACES_CDN:-false}"
 
-LOCAL_BACKUP_MARKER="$LOG_DIR/last-do-local-backup-date"
 DO_BACKUP_MARKER="$LOG_DIR/last-do-backup-date"
 DAILY_DO_BACKUP="${DAILY_DO_BACKUP:-true}"
 
 ensure_spaces_remote() {
     local do_key="${DO_SPACES_KEY:-}"
     local do_secret="${DO_SPACES_SECRET:-}"
-    
+
     if [[ -z "$do_key" ]] || [[ -z "$do_secret" ]]; then
         echo "❌ Error: DO_SPACES_KEY and DO_SPACES_SECRET must be set in config.env"
         exit 1
     fi
-    
+
     ensure_rclone
-    
-    if ! $RCLONE listremotes 2>/dev/null | grep -q "^spaces-rfm:$"; then
+
+    if ! "$RCLONE" listremotes 2>/dev/null | grep -q "^spaces-rfm:$"; then
         log "📦 Configuring rclone 'spaces-rfm' remote..."
-        $RCLONE config create spaces-rfm s3 \
+        "$RCLONE" config create spaces-rfm s3 \
             provider=DigitalOcean \
             access_key_id="$do_key" \
             secret_access_key="$do_secret" \
@@ -60,23 +107,11 @@ ensure_spaces_remote() {
     fi
 }
 
-# Handle arguments
-case "${1:-}" in
-    --list-backups)
-        ensure_spaces_remote
-        list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$DO_BACKUP_MARKER" "DO Spaces"
-        exit 0
-        ;;
-    --force-backup)
-        FORCE_BACKUP=true
-        SOURCE_DIR_ARG="${2:-}"
-        setup_common_vars
-        ;;
-    --help|-h)
-        print_help "$0" "DO Spaces"
-        exit 0
-        ;;
-esac
+if [[ "$ACTION" == "list" ]]; then
+    ensure_spaces_remote
+    list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$DO_BACKUP_MARKER" "DO Spaces"
+    exit 0
+fi
 
 [[ ! -d "$SOURCE_DIR" ]] && { echo "❌ Error: Source directory not found: $SOURCE_DIR"; exit 1; }
 
@@ -91,8 +126,58 @@ else
     log "   Mode: Origin (always fresh)"
 fi
 
-create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || true
+if [[ "$LOCAL_BACKUP_ONLY" == "true" ]]; then
+    fallback_rc=0
+    create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || fallback_rc=$?
+    case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
+        created|already_done|skipped_disabled)
+            print_sync_summary
+            exit 0
+            ;;
+        *)
+            exit "${fallback_rc:-1}"
+            ;;
+    esac
+fi
+
+coordinating_with_primary=false
+require_local_backup_completion=false
+if [[ "$FORCE_BACKUP" == "true" ]]; then
+    require_local_backup_completion=true
+fi
+if [[ "$FORCE_BACKUP" != "true" && "${SKIP_LOCAL_BACKUP:-false}" != "true" ]] &&
+    backup_needed "$LOCAL_BACKUP_MARKER" "$DAILY_LOCAL_BACKUP" "$FORCE_BACKUP" &&
+    [[ -n "${ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE:-}" ]]; then
+    coordinating_with_primary=true
+    require_local_backup_completion=true
+    coord_wait_rc=0
+    wait_for_primary_local_backup_result "$ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE" "${ROUTEFLUXMAP_LOCAL_BACKUP_WAIT_TIMEOUT:-7200}" || coord_wait_rc=$?
+    if [[ "$coord_wait_rc" -eq 0 ]]; then
+        # shellcheck disable=SC2034
+        SKIP_LOCAL_BACKUP=true
+    elif [[ "$coord_wait_rc" -eq 2 ]]; then
+        log "❌ Timed out waiting for primary local backup; aborting DO upload to preserve pre-upload snapshot"
+        exit 1
+    fi
+fi
+
+local_backup_rc=0
+create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || local_backup_rc=$?
+if [[ "$require_local_backup_completion" == "true" ]]; then
+    case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
+        created|already_done) ;;
+        skipped_disabled)
+            if [[ "$FORCE_BACKUP" == "true" && "$coordinating_with_primary" != "true" ]]; then
+                log "❌ Forced local backup did not complete (${_LOCAL_BACKUP_OUTCOME:-failed}); aborting DO upload to preserve pre-upload snapshot"
+                exit "${local_backup_rc:-1}"
+            fi
+            ;;
+        *)
+            log "❌ Local backup did not complete (${_LOCAL_BACKUP_OUTCOME:-failed}); aborting DO upload to preserve pre-upload snapshot"
+            exit "${local_backup_rc:-1}"
+            ;;
+    esac
+fi
 create_remote_backup "$BUCKET" "$DO_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_DO_BACKUP" || true
 upload_content "$BUCKET"
 print_sync_summary
-
