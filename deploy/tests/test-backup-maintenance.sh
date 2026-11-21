@@ -44,8 +44,15 @@ case "${1:-}" in
     sync)
         src="${2:-}"
         dst="${3:-}"
-        if [[ -n "${MOCK_BACKUP_SLEEP:-}" && "$dst" == */.tmp-backup-* ]]; then
-            sleep "$MOCK_BACKUP_SLEEP"
+        if [[ -n "${MOCK_BACKUP_READY_FILE:-}" && "$dst" == */.tmp-backup-* ]]; then
+            : > "$MOCK_BACKUP_READY_FILE"
+        fi
+        if [[ -n "${MOCK_BACKUP_RELEASE_FILE:-}" && "$dst" == */.tmp-backup-* ]]; then
+            _w=0
+            while [[ ! -e "$MOCK_BACKUP_RELEASE_FILE" ]] && (( _w < 100 )); do
+                sleep 0.1
+                _w=$((_w + 1))
+            done
         fi
         if [[ -n "${MOCK_FAIL_LOCAL_BACKUP:-}" && "$dst" == */.tmp-backup-* ]]; then
             mkdir -p "$dst"
@@ -434,21 +441,31 @@ UPDATE_LOG_ARCHIVES=2
 EOF
 
 printf '1234567890123456789012345\n' > "$PROJ6/deploy/logs/update.log"
-if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
-    "$PROJ6/deploy/scripts/update.sh" > "$LAST_RUN_LOG" 2>&1; then
+if ! (
+    exec 6>>"$PROJ6/deploy/logs/update.log"
+    PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
+        "$PROJ6/deploy/scripts/update.sh" >&6 2>&1
+    printf 'post-rotation-append-fd\n' >&6
+    exec 6>&-
+); then
     fail "Test 6 step 1 update.sh failed"
 fi
-[[ -f "$PROJ6/deploy/logs/update.log.1" && ! -e "$PROJ6/deploy/logs/update.log" ]] || \
-    fail "step 1 rotation did not move update.log to update.log.1"
+[[ -f "$PROJ6/deploy/logs/update.log.1.gz" && -f "$PROJ6/deploy/logs/update.log" ]] || \
+    fail "copy-truncate rotation did not produce update.log.1.gz while preserving update.log"
+gzip -t "$PROJ6/deploy/logs/update.log.1.gz" || fail "rotated update.log.1.gz failed gzip -t"
+gzip -dc "$PROJ6/deploy/logs/update.log.1.gz" | grep -qxF '1234567890123456789012345' || \
+    fail "rotated update.log.1.gz does not contain pre-rotation log contents"
+grep -qxF 'post-rotation-append-fd' "$PROJ6/deploy/logs/update.log" || \
+    fail "pre-opened append descriptor output did not reach active update.log after rotation"
 
-printf 'new cron run log\n' > "$PROJ6/deploy/logs/update.log"
+printf 'second rotation log payload 1234567890\n' >> "$PROJ6/deploy/logs/update.log"
 if ! PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
     "$PROJ6/deploy/scripts/update.sh" >> "$PROJ6/deploy/logs/update.log" 2>&1; then
     fail "Test 6 step 2 update.sh failed"
 fi
-[[ -f "$PROJ6/deploy/logs/update.log.1.gz" && ! -e "$PROJ6/deploy/logs/update.log.1" ]] || \
-    fail "step 2 rotation did not gzip update.log.1"
-gzip -t "$PROJ6/deploy/logs/update.log.1.gz" || fail "rotated update.log.1.gz failed gzip -t"
+[[ -f "$PROJ6/deploy/logs/update.log.2.gz" && -f "$PROJ6/deploy/logs/update.log.1.gz" ]] || \
+    fail "step 2 rotation did not shift update.log.1.gz to update.log.2.gz"
+gzip -t "$PROJ6/deploy/logs/update.log.2.gz" || fail "rotated update.log.2.gz failed gzip -t"
 
 if PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
     UPDATE_LOG_FILE="$PROJ6/deploy/logs/../../escaped.log" \
@@ -457,7 +474,7 @@ if PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MO
 fi
 grep -Fq 'Refusing unsafe UPDATE_LOG_FILE=' "$LAST_RUN_LOG" || \
     fail "path-traversal UPDATE_LOG_FILE rejection message missing"
-pass "update.sh 2-step cron-safe log rotation and canonical path check work"
+pass "update.sh copy-truncate cron-safe log rotation and canonical path check work"
 
 # ---------------------------------------------------------------------------
 # Test 7: cron-manage.sh verification predicates ignore comments & non-exec text
@@ -473,7 +490,7 @@ EOF
 bash -c '
     set -euo pipefail
     source "$1"
-    ! cron_d_has_daily_maintenance_job "$2"
+    if cron_d_has_daily_maintenance_job "$2"; then exit 1; fi
     cron_d_has_update_job "$2"
 ' _ "$PROJ7/deploy/scripts/cron-manage.sh" "$CRON_D_MOCK" || \
     fail "commented backup-maintenance line matched daily check or active update.sh missed"
@@ -493,8 +510,8 @@ EOF
 bash -c '
     set -euo pipefail
     source "$1"
-    ! cron_d_has_update_job "$2"
-    ! cron_d_has_daily_maintenance_job "$2"
+    if cron_d_has_update_job "$2"; then exit 1; fi
+    if cron_d_has_daily_maintenance_job "$2"; then exit 1; fi
 ' _ "$PROJ7/deploy/scripts/cron-manage.sh" "${CRON_D_MOCK}.indented" || \
     fail "indented comment, echo arg, or redirect target matched command check"
 
@@ -506,7 +523,7 @@ bash -c '
     set -euo pipefail
     source "$1"
     cron_d_has_monthly_maintenance_job "$2"
-    ! cron_d_has_daily_maintenance_job "$2"
+    if cron_d_has_daily_maintenance_job "$2"; then exit 1; fi
 ' _ "$PROJ7/deploy/scripts/cron-manage.sh" "${CRON_D_MOCK}.monthly" || \
     fail "monthly backup-maintenance entry check failed"
 pass "cron-manage verification predicates check scheduled command and ignore comments"
@@ -518,6 +535,8 @@ PROJ9="$TMP_DIR/proj9"
 setup_deploy_copy "$PROJ9"
 CALLS9="$TMP_DIR/calls9.log"
 RESULT9="$TMP_DIR/r2-timeout.result"
+TIMEOUT9_READY="$TMP_DIR/r9-timeout.ready"
+TIMEOUT9_RELEASE="$TMP_DIR/r9-timeout.release"
 cat > "$PROJ9/deploy/config.env" <<EOF
 R2_ENABLED=true
 DO_ENABLED=true
@@ -535,18 +554,46 @@ RCLONE_PATH=$MOCK_BIN/rclone
 EOF
 
 : > "$CALLS9"
-rm -f "$RESULT9"
-PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_BACKUP_SLEEP=2 MOCK_FAIL_LOCAL_BACKUP=1 \
-    MOCK_RCLONE_CALLS="$CALLS9" ROUTEFLUXMAP_LOCAL_BACKUP_RESULT_FILE="$RESULT9" \
+rm -f "$RESULT9" "$TIMEOUT9_READY" "$TIMEOUT9_RELEASE"
+r9_r2_pid="" r9_do_pid=""
+stop_test9_procs() {
+    : > "$TIMEOUT9_RELEASE" 2>/dev/null || true
+    if [[ -n "$r9_r2_pid" ]]; then
+        kill "$r9_r2_pid" 2>/dev/null || true
+        wait "$r9_r2_pid" 2>/dev/null || true
+        r9_r2_pid=""
+    fi
+    if [[ -n "$r9_do_pid" ]]; then
+        kill "$r9_do_pid" 2>/dev/null || true
+        wait "$r9_do_pid" 2>/dev/null || true
+        r9_do_pid=""
+    fi
+}
+trap 'stop_test9_procs; rm -rf "$TMP_DIR"' EXIT
+PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_BACKUP_READY_FILE="$TIMEOUT9_READY" MOCK_BACKUP_RELEASE_FILE="$TIMEOUT9_RELEASE" \
+    MOCK_FAIL_LOCAL_BACKUP=1 MOCK_RCLONE_CALLS="$CALLS9" ROUTEFLUXMAP_LOCAL_BACKUP_RESULT_FILE="$RESULT9" \
     "$PROJ9/deploy/scripts/upload-r2.sh" "$PROJ9/public/data" > "$TMP_DIR/r9-r2.log" 2>&1 &
 r9_r2_pid=$!
+r9_waited=0
+while [[ ! -e "$TIMEOUT9_READY" ]] && (( r9_waited < 50 )); do
+    sleep 0.1
+    r9_waited=$((r9_waited + 1))
+done
+[[ -e "$TIMEOUT9_READY" ]] || {
+    stop_test9_procs
+    fail "Test 9 R2 mock backup did not reach readiness barrier in time"
+}
 PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" MOCK_RCLONE_CALLS="$CALLS9" \
     ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$RESULT9" ROUTEFLUXMAP_LOCAL_BACKUP_WAIT_TIMEOUT=1 \
     "$PROJ9/deploy/scripts/upload-do.sh" "$PROJ9/public/data" > "$TMP_DIR/r9-do.log" 2>&1 &
 r9_do_pid=$!
 r9_r2_rc=0 r9_do_rc=0
-wait "$r9_r2_pid" || r9_r2_rc=$?
 wait "$r9_do_pid" || r9_do_rc=$?
+r9_do_pid=""
+: > "$TIMEOUT9_RELEASE"
+wait "$r9_r2_pid" || r9_r2_rc=$?
+r9_r2_pid=""
+trap 'rm -rf "$TMP_DIR"' EXIT
 [[ "$r9_r2_rc" == "0" ]] || fail "Test 9 R2 exited non-zero ($r9_r2_rc) despite continuing after local backup failure"
 [[ "$r9_do_rc" != "0" ]] || fail "DO did not abort after wait timeout"
 [[ "$(grep -c 'spaces-rfm:test-do-bucket' "$CALLS9" || true)" == "0" ]] || \

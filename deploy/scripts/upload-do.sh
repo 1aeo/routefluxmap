@@ -141,10 +141,15 @@ if [[ "$LOCAL_BACKUP_ONLY" == "true" ]]; then
 fi
 
 coordinating_with_primary=false
-if [[ "${SKIP_LOCAL_BACKUP:-false}" != "true" ]] &&
+require_local_backup_completion=false
+if [[ "$FORCE_BACKUP" == "true" ]]; then
+    require_local_backup_completion=true
+fi
+if [[ "$FORCE_BACKUP" != "true" && "${SKIP_LOCAL_BACKUP:-false}" != "true" ]] &&
     backup_needed "$LOCAL_BACKUP_MARKER" "$DAILY_LOCAL_BACKUP" "$FORCE_BACKUP" &&
     [[ -n "${ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE:-}" ]]; then
     coordinating_with_primary=true
+    require_local_backup_completion=true
     coord_wait_rc=0
     wait_for_primary_local_backup_result "$ROUTEFLUXMAP_PRIMARY_LOCAL_BACKUP_RESULT_FILE" "${ROUTEFLUXMAP_LOCAL_BACKUP_WAIT_TIMEOUT:-7200}" || coord_wait_rc=$?
     if [[ "$coord_wait_rc" -eq 0 ]]; then
@@ -158,11 +163,17 @@ fi
 
 local_backup_rc=0
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || local_backup_rc=$?
-if [[ "$coordinating_with_primary" == "true" ]]; then
+if [[ "$require_local_backup_completion" == "true" ]]; then
     case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
-        created|already_done|skipped_disabled) ;;
+        created|already_done) ;;
+        skipped_disabled)
+            if [[ "$FORCE_BACKUP" == "true" && "$coordinating_with_primary" != "true" ]]; then
+                log "❌ Forced local backup did not complete (${_LOCAL_BACKUP_OUTCOME:-failed}); aborting DO upload to preserve pre-upload snapshot"
+                exit "${local_backup_rc:-1}"
+            fi
+            ;;
         *)
-            log "❌ Fallback local backup did not complete (${_LOCAL_BACKUP_OUTCOME:-failed}); aborting DO upload to preserve pre-upload snapshot"
+            log "❌ Local backup did not complete (${_LOCAL_BACKUP_OUTCOME:-failed}); aborting DO upload to preserve pre-upload snapshot"
             exit "${local_backup_rc:-1}"
             ;;
     esac

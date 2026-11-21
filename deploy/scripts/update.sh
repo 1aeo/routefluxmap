@@ -169,16 +169,17 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-# Safe 2-step rotation compatible with cron `>> update.log 2>&1`:
-# On the run that sees >= max_bytes, rename update.log -> update.log.1 (leaving
-# the current cron stdout fd intact on .1). On the next cron run, once cron has
-# created a fresh update.log inode, shift old .gz archives and compress .1.
+# Safe copy-truncate rotation compatible with cron `>> update.log 2>&1`:
+# Compress the active log to a temporary file inside the validated log dir,
+# shift existing .N.gz archives, promote the new .1.gz, and truncate the open
+# update.log file in place so cron's append file descriptor continues writing
+# to the same inode.
 rotate_update_log() {
     local log_file="${UPDATE_LOG_FILE:-$DEPLOY_DIR/logs/update.log}"
     local max_bytes="${UPDATE_LOG_MAX_BYTES:-33554432}"
     local keep="${UPDATE_LOG_ARCHIVES:-3}"
     local allowed_dir="$DEPLOY_DIR/logs"
-    local allowed_real log_dir_raw log_dir_real log_base resolved_log index size
+    local allowed_real log_dir_raw log_dir_real log_base resolved_log archive_stage index size
 
     if [[ ! "$max_bytes" =~ ^[1-9][0-9]*$ ]] || [[ ! "$keep" =~ ^[1-9][0-9]*$ ]]; then
         log "❌ Invalid log rotation setting (UPDATE_LOG_MAX_BYTES=$max_bytes, UPDATE_LOG_ARCHIVES=$keep)" >&2
@@ -207,30 +208,44 @@ rotate_update_log() {
         exit 2
     fi
     resolved_log="${log_dir_real}/${log_base}"
-    if [[ -L "$resolved_log" || ( -e "$resolved_log" && ! -f "$resolved_log" ) || -L "${resolved_log}.1" || ( -e "${resolved_log}.1" && ! -f "${resolved_log}.1" ) ]]; then
+    if [[ -L "$resolved_log" || ( -e "$resolved_log" && ! -f "$resolved_log" ) ]]; then
         log "❌ Refusing unsafe UPDATE_LOG_FILE=$resolved_log (must not be a symlink or special file)" >&2
         exit 2
     fi
+    for ((index=1; index<=keep; index++)); do
+        if [[ -L "${resolved_log}.${index}.gz" || ( -e "${resolved_log}.${index}.gz" && ! -f "${resolved_log}.${index}.gz" ) ]]; then
+            log "❌ Refusing unsafe archive target=${resolved_log}.${index}.gz (must not be a symlink or special file)" >&2
+            exit 2
+        fi
+    done
 
-    if [[ -f "${resolved_log}.1" && -e "$resolved_log" ]]; then
+    [[ -f "$resolved_log" ]] || return 0
+    size=$(wc -c < "$resolved_log" | tr -d '[:space:]')
+    if (( size >= max_bytes )); then
+        archive_stage="${resolved_log}.rotate.tmp.$$.gz"
+        rm -f -- "$archive_stage"
+        if ! gzip -c -- "$resolved_log" > "$archive_stage" || ! gzip -t -- "$archive_stage" 2>/dev/null; then
+            rm -f -- "$archive_stage"
+            log "⚠️  Failed to stage rotated update.log archive; keeping active log un-truncated" >&2
+            return 1
+        fi
         rm -f -- "${resolved_log}.${keep}.gz"
         for ((index=keep-1; index>=1; index--)); do
             if [[ -f "${resolved_log}.${index}.gz" ]]; then
                 mv -f -- "${resolved_log}.${index}.gz" "${resolved_log}.$((index + 1)).gz"
             fi
         done
-        gzip -f -- "${resolved_log}.1"
-    fi
-
-    [[ -f "$resolved_log" ]] || return 0
-    size=$(wc -c < "$resolved_log" | tr -d '[:space:]')
-    if (( size >= max_bytes )); then
-        mv -f -- "$resolved_log" "${resolved_log}.1"
-        log "🗜️  Rotated update.log (${size} bytes); compression queued for next run"
+        if ! mv -f -- "$archive_stage" "${resolved_log}.1.gz"; then
+            rm -f -- "$archive_stage"
+            log "⚠️  Failed to install ${resolved_log}.1.gz; keeping active log un-truncated" >&2
+            return 1
+        fi
+        : > "$resolved_log"
+        log "🗜️  Rotated update.log (${size} bytes -> ${log_base}.1.gz)"
     fi
 }
 
-rotate_update_log
+rotate_update_log || true
 
 # Get count of dates in index.json
 get_date_count() {
