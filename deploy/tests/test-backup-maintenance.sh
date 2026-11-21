@@ -444,7 +444,7 @@ printf '1234567890123456789012345\n' > "$PROJ6/deploy/logs/update.log"
 if ! (
     exec 6>>"$PROJ6/deploy/logs/update.log"
     PATH="$MOCK_BIN:$MOCK_FLOCK_BIN:$PATH" NODE_CMD="$MOCK_BIN/node" NPX_CMD="$MOCK_BIN/npx" MOCK_RCLONE_CALLS="$CALLS6" \
-        "$PROJ6/deploy/scripts/update.sh" >&6 2>&1
+        "$PROJ6/deploy/scripts/update.sh" >&6 2>&1 || exit $?
     printf 'post-rotation-append-fd\n' >&6
     exec 6>&-
 ); then
